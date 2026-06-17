@@ -1,0 +1,12 @@
+services:
+  medialibmanager:
+    container_name: medialibmanager
+    image: ghcr.io/parcival42/medialibmanager:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - /path/to/your/media:/media
+      - /path/to/your/data:/data
+    restart: unless-stopped
+    environment:
+      - AUTH_SECRET=change_me_to_a_long_random_string

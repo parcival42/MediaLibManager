@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+backend/static/
+
+# Data / runtime
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local-only context & planning docs (real specifics / origin, never committed)
+*.local.md
+
+# Local-only dev testing
+docker-compose.override.yml
+testmedia/
+docker-manage.ps1
+
+# Design mockups (throwaway, local only)
+design-mockups/

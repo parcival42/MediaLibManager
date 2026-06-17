@@ -1,0 +1,6 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+Pillow>=9.0.0
+imagehash>=4.3
+pillow-heif>=0.16
+pydantic>=2.7

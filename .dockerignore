@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/__pycache__
+**/.venv
+**/venv
+*.db
+*.db-wal
+*.db-shm
+.git
+*.local.md
