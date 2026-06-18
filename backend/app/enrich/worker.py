@@ -39,7 +39,34 @@ ERROR_MAX = 500    # truncate stored error messages
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 _current_file: str | None = None
-_completion_times: deque[float] = deque(maxlen=100)
+
+# Per-stage completion samples for the phase ETA, each entry (finished_at, size).
+# Stages 0/1 estimate remaining time by file count, stage 2 (MD5) by bytes —
+# MD5 cost scales with file size, not file count. Kept per stage so a phase
+# transition does not poison the rate with the previous phase's (very different)
+# pace. Guarded by a lock because several worker threads append concurrently and
+# status() iterates to sum bytes.
+SAMPLES_MAX = 100
+MIN_SAMPLES = 8
+_stage_samples: list[deque] = [deque(maxlen=SAMPLES_MAX) for _ in range(3)]
+_samples_lock = threading.Lock()
+
+
+def _phase_rate(stage: int) -> float | None:
+    """Recent throughput for one stage: files/sec for stages 0-1, bytes/sec for
+    stage 2 (MD5). ``None`` until enough samples accrue or no time has elapsed."""
+    with _samples_lock:
+        samples = list(_stage_samples[stage])
+    if len(samples) < MIN_SAMPLES:
+        return None
+    window = samples[-1][0] - samples[0][0]
+    if window <= 0:
+        return None
+    if stage == 2:
+        # Bytes finished within the window (all but the sample marking its start).
+        done_bytes = sum(sz for _, sz in samples[1:])
+        return done_bytes / window if done_bytes > 0 else None
+    return (len(samples) - 1) / window
 
 
 def _do_stage(row) -> tuple[int, dict]:
@@ -68,6 +95,8 @@ def _process_one(row) -> None:
     """Advance a single file by one stage and persist the outcome."""
     global _current_file
     _current_file = os.path.relpath(row["path"], str(paths.media_root()))
+    src_stage = row["enrich_stage"]
+    succeeded = False
     try:
         new_stage, cols = _do_stage(row)
         cols["enrich_stage"] = new_stage
@@ -75,6 +104,7 @@ def _process_one(row) -> None:
         if new_stage >= 3:
             cols["enrich_status"] = "done"
             cols["enriched_at"] = time.time()
+        succeeded = True
     except Exception as exc:  # noqa: BLE001 - recorded on the row, worker continues
         cols = {"enrich_status": "error", "error": str(exc)[:ERROR_MAX],
                 "enriched_at": time.time()}
@@ -85,13 +115,17 @@ def _process_one(row) -> None:
                 (*cols.values(), row["id"]))
     con.commit()
     con.close()
-    _completion_times.append(time.time())
+    # Record the finished step against the stage it completed, for the phase ETA.
+    # Errors are terminal and don't reflect steady-state throughput, so skip them.
+    if succeeded and src_stage < 3:
+        with _samples_lock:
+            _stage_samples[src_stage].append((time.time(), row["size"] or 0))
 
 
 def _claim_batch(limit: int) -> list:
     con = db.connect()
     rows = con.execute(
-        "SELECT id, path, type, enrich_stage, duration FROM files "
+        "SELECT id, path, type, enrich_stage, duration, size FROM files "
         "WHERE present = 1 AND enrich_status = 'pending' "
         "ORDER BY enrich_stage ASC, path ASC LIMIT ?",
         (limit,),
@@ -154,7 +188,8 @@ def status() -> dict:
         "SUM(CASE WHEN enrich_status = 'error' THEN 3 ELSE enrich_stage END) AS stage_sum, "
         "SUM(CASE WHEN enrich_status = 'pending' AND enrich_stage = 0 THEN 1 ELSE 0 END) AS ps0, "
         "SUM(CASE WHEN enrich_status = 'pending' AND enrich_stage = 1 THEN 1 ELSE 0 END) AS ps1, "
-        "SUM(CASE WHEN enrich_status = 'pending' AND enrich_stage = 2 THEN 1 ELSE 0 END) AS ps2 "
+        "SUM(CASE WHEN enrich_status = 'pending' AND enrich_stage = 2 THEN 1 ELSE 0 END) AS ps2, "
+        "SUM(CASE WHEN enrich_status = 'pending' AND enrich_stage = 2 THEN size ELSE 0 END) AS pbytes2 "
         "FROM files WHERE present = 1"
     ).fetchone()
     con.close()
@@ -184,20 +219,28 @@ def status() -> dict:
             phase_total = phase_done + pending_in_phase
             break
 
-    # Per-phase ETA from recent completion rate (stage completions / second).
+    # Per-phase ETA from that phase's own recent throughput. Stage 2 (MD5) is
+    # estimated over remaining bytes; stages 0/1 over remaining file count.
     eta_seconds: float | None = None
-    times = _completion_times  # local snapshot; deque reads are GIL-safe
-    if not paused and frontier_stage is not None and len(times) >= 10:
-        window = times[-1] - times[0]
-        if window > 0:
-            rate = (len(times) - 1) / window
-            eta_seconds = round(pending_in_phase / rate)
+    if not paused and frontier_stage is not None:
+        rate = _phase_rate(frontier_stage)
+        if rate:
+            if frontier_stage == 2:
+                eta_seconds = round((row["pbytes2"] or 0) / rate)
+            else:
+                eta_seconds = round(pending_in_phase / rate)
 
     return {
         "total": total,
         "done": row["done"] or 0,
         "error": row["error"] or 0,
         "pending": pending,
+        # Work is three stages per file; the bar (and these counters) are
+        # weighted by stage so they advance from the first phase, unlike the
+        # file-level `pending` which only drops in the final (MD5) phase.
+        "steps_total": total * 3,
+        "steps_done": stage_sum,
+        "steps_pending": total * 3 - stage_sum,
         "percent": percent,
         "paused": paused,
         "active": pending > 0,

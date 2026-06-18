@@ -20,6 +20,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   enrich_done: { de: 'Anreicherung fertig', en: 'Enrichment complete' },
   enrich_paused: { de: 'Anreicherung pausiert', en: 'Enrichment paused' },
   enrich_remaining: { de: 'verbleibend', en: 'remaining' },
+  enrich_steps_remaining: { de: 'Schritte verbleibend', en: 'steps remaining' },
   reenrich: { de: 'Neu anreichern', en: 'Re-enrich' },
   enrich_error: { de: 'Anreicherungsfehler', en: 'Enrichment error' },
   reenrich_queued: { de: 'Zur Neuanreicherung eingereiht.', en: 'Queued for re-enrichment.' },

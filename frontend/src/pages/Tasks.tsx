@@ -29,6 +29,9 @@ interface EnrichStatus {
   done: number
   error: number
   pending: number
+  steps_total: number
+  steps_done: number
+  steps_pending: number
   percent: number
   paused: boolean
   active: boolean
@@ -202,10 +205,13 @@ function EnrichmentBlock() {
 
   if (!data || data.total === 0) return null
 
+  // Count by stage-steps, not files: it matches the (stage-weighted) bar and
+  // ticks down from the first phase. File-level `pending` only drops in the
+  // final MD5 phase, which made the bar and the number look out of sync.
   const label = data.paused
     ? t('enrich_paused')
     : data.pending
-      ? `${t('enrichment')} · ${data.pending.toLocaleString()} ${t('enrich_remaining')}`
+      ? `${t('enrichment')} · ${data.steps_pending.toLocaleString()} ${t('enrich_steps_remaining')}`
       : t('enrich_done')
 
   const barColor = data.paused ? 'bg-warn' : data.pending ? 'bg-accent' : 'bg-accent/60'
