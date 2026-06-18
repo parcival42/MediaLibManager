@@ -10,6 +10,7 @@ import Duplicates from './pages/Duplicates'
 import Rename from './pages/Rename'
 import Metadata from './pages/Metadata'
 import Tasks from './pages/Tasks'
+import Statistics from './pages/Statistics'
 import Settings from './pages/Settings'
 
 interface AuthState {
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="/rename" element={<Rename />} />
         <Route path="/metadata" element={<Metadata />} />
         <Route path="/tasks" element={<Tasks />} />
+        <Route path="/statistics" element={<Statistics />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

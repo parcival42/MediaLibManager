@@ -14,6 +14,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   nav_rename: { de: 'Umbenennen', en: 'Rename' },
   nav_metadata: { de: 'Metadaten', en: 'Metadata' },
   nav_tasks: { de: 'Tasks', en: 'Tasks' },
+  nav_statistics: { de: 'Statistik', en: 'Statistics' },
   nav_settings: { de: 'Einstellungen', en: 'Settings' },
 
   enrichment: { de: 'Anreicherung', en: 'Enrichment' },
@@ -335,6 +336,29 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   ren_assignment_add: { de: 'Zuordnung hinzufügen', en: 'Add assignment' },
   ren_assignment_none: { de: 'Keine Zuordnungen.', en: 'No assignments.' },
   ren_choose_directory: { de: 'Verzeichnis wählen', en: 'Choose directory' },
+
+  stats_subtitle: {
+    de: 'Bestand, Deduplizierung und Metadaten-Bereinigung auf einen Blick.',
+    en: 'Library composition, deduplication and metadata cleanup at a glance.',
+  },
+  stats_library_title: { de: 'Bibliothek', en: 'Library' },
+  stats_files_total: { de: 'Dateien erfasst', en: 'files indexed' },
+  stats_total_size: { de: 'Gesamtgröße', en: 'Total size' },
+  stats_dedup_title: { de: 'Deduplizierung', en: 'Deduplication' },
+  stats_dedup_removed: { de: 'Dateien entfernt', en: 'files removed' },
+  stats_dedup_freed: { de: 'Speicher freigegeben', en: 'space reclaimed' },
+  stats_dedup_empty: {
+    de: 'Noch keine Duplikate gelöscht.',
+    en: 'No duplicates deleted yet.',
+  },
+  stats_metadata_title: { de: 'Metadaten entfernt', en: 'Metadata stripped' },
+  stats_metadata_stripped: { de: 'Dateien bereinigt', en: 'files cleaned' },
+  stats_metadata_failed: { de: 'fehlgeschlagen', en: 'failed' },
+  stats_metadata_errors: { de: 'Fehler', en: 'errors' },
+  stats_metadata_empty: {
+    de: 'Noch keine Metadaten entfernt.',
+    en: 'No metadata stripped yet.',
+  },
 }
 
 interface I18nCtx {

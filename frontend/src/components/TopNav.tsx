@@ -19,6 +19,7 @@ const MAIN = [
   { to: '/duplicates', key: 'nav_duplicates' },
   { to: '/rename', key: 'nav_rename' },
   { to: '/metadata', key: 'nav_metadata' },
+  { to: '/statistics', key: 'nav_statistics' },
 ]
 
 export default function TopNav({
