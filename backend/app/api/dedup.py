@@ -21,9 +21,11 @@ from ..tasks import runner
 
 router = APIRouter(prefix="/api")
 
+# The thumbnail JPEG itself is not selected here — it is served by URL
+# (/api/media/{id}/thumb) and only a presence flag travels in the list payload.
 MEMBER_COLUMNS = ("id, path, type, size, width, height, duration, codec, mtime, "
-                  "enrich_status, thumbnail_b64, phash, mean_saturation, "
-                  "frame_hashes, frames_b64")
+                  "enrich_status, (thumbnail_b64 IS NOT NULL) AS has_thumb, "
+                  "phash, mean_saturation, frame_hashes, frames_b64")
 
 # Strongest-evidence-first — matches the detection pass order in dedup/rebuild.py.
 KIND_ORDER = ["exact_image", "exact_video", "exact_other", "visual", "video", "deep"]
@@ -65,7 +67,7 @@ def _enrich_group(g: dict, members: list[dict], frame_threshold: int) -> dict:
             "height": m["height"],
             "duration": m["duration"],
             "codec": m["codec"],
-            "thumbnail_b64": m["thumbnail_b64"],
+            "has_thumb": bool(m["has_thumb"]),
             "mean_saturation": m["mean_saturation"],
             "is_keep": reference is not None and m["id"] == reference["id"],
         }

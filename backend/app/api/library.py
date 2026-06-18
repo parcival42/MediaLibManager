@@ -1,4 +1,6 @@
 """Library endpoints — paginated listing, single item, and ranged media streaming."""
+import base64
+import binascii
 import mimetypes
 import os
 import sqlite3
@@ -6,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .. import auth, db, paths
@@ -240,6 +242,32 @@ def transcode_media(file_id: int, _: str = Depends(auth.current_user)):
 
     return StreamingResponse(_stream(), media_type="video/mp4",
                              headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/media/{file_id}/thumb")
+def media_thumbnail(file_id: int, _: str = Depends(auth.current_user)):
+    """Serve the pre-computed thumbnail as a real JPEG response.
+
+    The thumbnail is stored base64-encoded in ``files.thumbnail_b64``; decoding
+    it back to bytes here (instead of inlining the base64 into list payloads)
+    keeps listing JSON small and lets the browser cache and lazy-load thumbnails
+    by URL. Cached for a day — short enough that a re-enrich (same file id, new
+    thumbnail) is picked up soon, long enough to help repeat views.
+    """
+    con = db.connect()
+    row = con.execute("SELECT thumbnail_b64 FROM files WHERE id = ?", (file_id,)).fetchone()
+    con.close()
+    if not row or not row["thumbnail_b64"]:
+        raise HTTPException(status_code=404, detail="no thumbnail")
+    try:
+        data = base64.b64decode(row["thumbnail_b64"])
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=404, detail="no thumbnail")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/media/{file_id}")

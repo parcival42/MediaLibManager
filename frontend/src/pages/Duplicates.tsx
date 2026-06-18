@@ -18,7 +18,7 @@ interface Member {
   height?: number
   duration?: number
   codec?: string
-  thumbnail_b64?: string
+  has_thumb?: boolean
   mean_saturation?: number | null
   is_keep: boolean
   frames?: string[]
@@ -539,9 +539,9 @@ function DuplicateCard({
       )}
 
       {/* Large preview — click to open the media dialog */}
-      {m.thumbnail_b64 ? (
+      {m.has_thumb ? (
         <img
-          src={`data:image/jpeg;base64,${m.thumbnail_b64}`}
+          src={`/api/media/${m.id}/thumb`}
           alt={m.filename}
           loading="lazy"
           onClick={openPreview}
