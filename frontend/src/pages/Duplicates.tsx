@@ -143,6 +143,21 @@ export default function Duplicates() {
   })
   const rebuilding = rebuildMut.isPending || rebuildTask.data?.status === 'running'
 
+  // Deep-compare toggle. Persisted as a setting (it governs the all-pairs video
+  // pass, which is expensive on large unique libraries); changing it takes
+  // effect on the next rebuild, just like the scope selector.
+  const settings = useQuery<Record<string, unknown>>({
+    queryKey: ['settings'],
+    queryFn: () => api('/api/settings'),
+    refetchOnWindowFocus: false,
+  })
+  const deepEnabled = settings.data?.deep_enabled !== false
+  const deepMut = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api('/api/settings', { method: 'PUT', body: JSON.stringify({ deep_enabled: enabled }) }),
+    onSuccess: () => settings.refetch(),
+  })
+
   // --- Delete selected ---
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const deleteMut = useMutation({
@@ -212,6 +227,18 @@ export default function Duplicates() {
             {t('dup_scope_label')}: <span className="font-mono text-ink-2">{appliedScope}</span>
           </span>
         )}
+        <label
+          className="ml-auto flex items-center gap-2 text-sm text-ink-2"
+          title={t('dup_deep_enabled_hint')}
+        >
+          <input
+            type="checkbox"
+            checked={deepEnabled}
+            disabled={deepMut.isPending || rebuilding}
+            onChange={(e) => deepMut.mutate(e.target.checked)}
+          />
+          {t('dup_deep_enabled')}
+        </label>
       </div>
 
       <div className="mb-3">

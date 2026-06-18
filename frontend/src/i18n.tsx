@@ -134,6 +134,11 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   },
   dup_rebuild: { de: 'Duplikate suchen', en: 'Find duplicates' },
   dup_rebuilding: { de: 'Suche läuft…', en: 'Scanning…' },
+  dup_deep_enabled: { de: 'Deep-Vergleich (Video)', en: 'Deep compare (video)' },
+  dup_deep_enabled_hint: {
+    de: 'Vergleicht jedes noch nicht gruppierte Video mit jedem anderen (kein Vorfilter). Bei großen, überwiegend einzigartigen Bibliotheken sehr langsam — dann ausschalten. Gilt ab der nächsten Suche.',
+    en: 'Compares every not-yet-grouped video against every other (no prefilter). Very slow on large, mostly-unique libraries — turn off then. Applies from the next scan.',
+  },
   dup_none: { de: 'Keine Duplikate gefunden. Starte die Suche, sobald die Anreicherung läuft.', en: 'No duplicates found. Run a scan once enrichment has progressed.' },
   dup_groups_count: { de: 'Gruppen', en: 'groups' },
   dup_reclaimable: { de: 'freigebbar', en: 'reclaimable' },

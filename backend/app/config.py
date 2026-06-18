@@ -18,6 +18,7 @@ DEFAULTS = {
     "video_frame_threshold": 10,     # Hamming distance per sampled video frame
     "video_min_matches":     4,      # required matches out of 5 frames
     "duration_tolerance":    3.0,    # seconds, duration pre-filter for 5-frame compare
+    "deep_enabled":          True,   # run the deep (edge-block) video pass at all
     "deep_threshold":        10,     # Hamming distance per deep-compare edge frame
     "deep_min_fraction":     0.3,    # fraction of a block's frames that must match
     "worker_count":          4,      # parallel threads during enrichment

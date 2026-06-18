@@ -39,6 +39,7 @@ def rebuild(ctx, directory: str | None = None) -> dict:
     duration_tolerance = float(config.get("duration_tolerance"))
     deep_threshold = int(config.get("deep_threshold"))
     deep_min_fraction = float(config.get("deep_min_fraction"))
+    deep_enabled = bool(config.get("deep_enabled"))
     pattern = _like_pattern(directory)
 
     ctx.log(f"Scope: {directory}" if directory else "Scope: entire library")
@@ -71,10 +72,14 @@ def rebuild(ctx, directory: str | None = None) -> dict:
         ctx.progress(75)
         ctx.raise_if_cancelled()
 
-        ctx.log("Finding similar videos (deep compare)…")
-        deep_groups = visual.find_deep_groups(
-            con, deep_threshold, deep_min_fraction, claimed, pattern
-        )
+        if deep_enabled:
+            ctx.log("Finding similar videos (deep compare)…")
+            deep_groups = visual.find_deep_groups(
+                con, deep_threshold, deep_min_fraction, claimed, pattern
+            )
+        else:
+            ctx.log("Deep compare disabled — skipping.")
+            deep_groups = []
         ctx.progress(90)
         ctx.raise_if_cancelled()
 
