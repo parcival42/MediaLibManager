@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { api } from './api/client'
@@ -21,7 +22,16 @@ export default function App() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['auth'],
     queryFn: () => api<AuthState>('/api/auth/check'),
+    refetchOnWindowFocus: true,
   })
+
+  // Any 401 from a protected call re-checks auth, so a session that became
+  // invalid mid-use drops back to the login / setup screen.
+  useEffect(() => {
+    const onUnauthorized = () => refetch()
+    window.addEventListener('auth:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('auth:unauthorized', onUnauthorized)
+  }, [refetch])
 
   if (isLoading) {
     return <div className="grid h-full place-items-center text-ink-3">…</div>

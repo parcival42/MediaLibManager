@@ -28,6 +28,8 @@ def _user_count() -> int:
 @router.get("/auth/check")
 def auth_check(request: Request):
     user = auth.verify_token(request.cookies.get(auth.COOKIE_NAME))
+    if user and not auth.user_exists(user):
+        user = None
     return {"authenticated": bool(user), "username": user, "needs_setup": _user_count() == 0}
 
 

@@ -11,6 +11,8 @@ import time
 
 from fastapi import HTTPException, Request, Response
 
+from . import db
+
 SECRET = os.environ.get("AUTH_SECRET") or secrets.token_hex(32)
 SESSION_DAYS = 30
 PBKDF2_ROUNDS = 200_000
@@ -58,9 +60,22 @@ def set_cookie(response: Response, token: str) -> None:
     )
 
 
+def user_exists(username: str) -> bool:
+    """Whether the username still backs a real account in the DB."""
+    con = db.connect()
+    row = con.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+    con.close()
+    return row is not None
+
+
 def current_user(request: Request) -> str:
-    """FastAPI dependency: returns the username or raises 401."""
+    """FastAPI dependency: returns the username or raises 401.
+
+    A token can be cryptographically valid yet name a user that no longer
+    exists (e.g. the DB was wiped while a signed cookie is still held). Such
+    orphaned sessions must be rejected, so existence is checked here.
+    """
     user = verify_token(request.cookies.get(COOKIE_NAME))
-    if not user:
+    if not user or not user_exists(user):
         raise HTTPException(status_code=401, detail="not authenticated")
     return user
