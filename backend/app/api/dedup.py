@@ -22,7 +22,8 @@ from ..tasks import runner
 router = APIRouter(prefix="/api")
 
 MEMBER_COLUMNS = ("id, path, type, size, width, height, duration, codec, mtime, "
-                  "enrich_status, thumbnail_b64, phash, frame_hashes, frames_b64")
+                  "enrich_status, thumbnail_b64, phash, mean_saturation, "
+                  "frame_hashes, frames_b64")
 
 # Strongest-evidence-first — matches the detection pass order in dedup/rebuild.py.
 KIND_ORDER = ["exact_image", "exact_video", "exact_other", "visual", "video", "deep"]
@@ -65,6 +66,7 @@ def _enrich_group(g: dict, members: list[dict], frame_threshold: int) -> dict:
             "duration": m["duration"],
             "codec": m["codec"],
             "thumbnail_b64": m["thumbnail_b64"],
+            "mean_saturation": m["mean_saturation"],
             "is_keep": reference is not None and m["id"] == reference["id"],
         }
 
@@ -142,6 +144,31 @@ def rebuild_duplicates(req: RebuildRequest, _: str = Depends(auth.current_user))
     task_id = runner.create_task("dedup_rebuild", {"directory": directory})
     runner.enqueue(task_id, lambda ctx: dedup_rebuild.rebuild(ctx, directory=directory))
     return {"task_id": task_id}
+
+
+class IgnoreRequest(BaseModel):
+    file_ids: list[int]  # all members of the group to mark as "not duplicates"
+
+
+@router.post("/duplicates/ignore")
+def ignore_group(req: IgnoreRequest, _: str = Depends(auth.current_user)):
+    if len(req.file_ids) < 2:
+        raise HTTPException(status_code=400, detail="need at least 2 files")
+    import time as _time
+    ids = sorted(req.file_ids)
+    pairs = [
+        (ids[i], ids[j], _time.time())
+        for i in range(len(ids))
+        for j in range(i + 1, len(ids))
+    ]
+    con = db.connect()
+    con.executemany(
+        "INSERT OR IGNORE INTO dedup_ignores(file_id_a, file_id_b, ignored_at) VALUES(?, ?, ?)",
+        pairs,
+    )
+    con.commit()
+    con.close()
+    return {"pairs_added": len(pairs)}
 
 
 class DeleteRequest(BaseModel):

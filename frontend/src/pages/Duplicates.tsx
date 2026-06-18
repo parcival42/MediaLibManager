@@ -19,6 +19,7 @@ interface Member {
   duration?: number
   codec?: string
   thumbnail_b64?: string
+  mean_saturation?: number | null
   is_keep: boolean
   frames?: string[]
   phash_distance?: number
@@ -75,6 +76,9 @@ export default function Duplicates() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [preview, setPreview] = useState<Member | null>(null)
   const [frameSrc, setFrameSrc] = useState<string | null>(null)
+  // Group-scoped image lightbox: the group's image members plus the one to show
+  // first, so ←/→ flips between visually-identical copies for direct comparison.
+  const [lightbox, setLightbox] = useState<{ members: Member[]; start: number } | null>(null)
 
   // Directory scope: null = entire library. `pendingScope` is the tree
   // selection (applies on the next rebuild); `appliedScope` is what the
@@ -178,6 +182,30 @@ export default function Duplicates() {
     if (!selected.size) return
     if (!window.confirm(t('dup_delete_confirm'))) return
     deleteMut.mutate([...selected])
+  }
+
+  // Groups marked "not duplicates" this session — kept in local state so they
+  // survive kind-filter switches. The group stays visible (server hasn't rebuilt
+  // yet) but is dimmed with an "ignored" banner. On the next rebuild it is gone.
+  const [ignoredGroupIds, setIgnoredGroupIds] = useState<Set<number>>(new Set())
+  useEffect(() => {
+    setIgnoredGroupIds(new Set())
+  }, [list.data])
+
+  const ignoreMut = useMutation({
+    mutationFn: ({ fileIds }: { fileIds: number[]; groupId: number }) =>
+      api('/api/duplicates/ignore', {
+        method: 'POST',
+        body: JSON.stringify({ file_ids: fileIds }),
+      }),
+    onSuccess: (_data, variables) => {
+      setIgnoredGroupIds((prev) => new Set([...prev, variables.groupId]))
+    },
+  })
+
+  const onIgnoreGroup = (g: Group) => {
+    if (!window.confirm(t('dup_ignore_confirm'))) return
+    ignoreMut.mutate({ fileIds: g.members.map((m) => m.id), groupId: g.id })
   }
 
   return (
@@ -292,8 +320,10 @@ export default function Duplicates() {
         <EmptyState text={t('dup_none')} />
       ) : (
         <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
-          {groups.map((g) => (
-            <div key={g.id} className="rounded-2xl border border-line bg-surface-2 p-4">
+          {groups.map((g) => {
+            const isIgnored = ignoredGroupIds.has(g.id)
+            return (
+            <div key={g.id} className={`rounded-2xl border border-line bg-surface-2 p-4 transition ${isIgnored ? 'opacity-40' : ''}`}>
               <div className="mb-3 flex items-center gap-3 text-xs">
                 <span className="rounded-md border border-line bg-bg/60 px-2 py-0.5 font-medium uppercase tracking-wide text-ink-2">
                   {t(KIND_LABEL[g.kind] ?? g.kind)}
@@ -301,23 +331,57 @@ export default function Duplicates() {
                 <span className="text-ink-3">
                   {g.members.length} · {formatSize(g.reclaimable)} {t('dup_reclaimable')}
                 </span>
+                {isIgnored ? (
+                  <span className="ml-auto rounded-md border border-line px-2 py-0.5 text-ink-3">
+                    {t('dup_ignore_group_pending')}
+                  </span>
+                ) : (
+                <button
+                  onClick={() => onIgnoreGroup(g)}
+                  disabled={ignoreMut.isPending}
+                  title={t('dup_ignore_group_hint')}
+                  className="ml-auto rounded-md border border-line px-2 py-0.5 text-ink-3 transition hover:border-ink-3 hover:text-ink-1 disabled:opacity-40"
+                >
+                  {t('dup_ignore_group')}
+                </button>
+                )}
               </div>
               <div className="flex flex-wrap gap-3">
-                {g.members.map((m) => (
-                  <DuplicateCard
-                    key={m.id}
-                    m={m}
-                    selected={selected.has(m.id)}
-                    onToggle={() => toggle(m.id)}
-                    onOpen={() => setPreview(m)}
-                    onOpenFrame={(src) => setFrameSrc(src)}
-                    t={t}
-                  />
-                ))}
+                {g.members.map((m) => {
+                  const imageMembers = g.members.filter((x) => x.type === 'image')
+                  return (
+                    <DuplicateCard
+                      key={m.id}
+                      m={m}
+                      selected={selected.has(m.id)}
+                      onToggle={() => toggle(m.id)}
+                      onOpen={() =>
+                        m.type === 'image'
+                          ? setLightbox({
+                              members: imageMembers,
+                              start: Math.max(0, imageMembers.findIndex((x) => x.id === m.id)),
+                            })
+                          : setPreview(m)
+                      }
+                      onOpenFrame={(src) => setFrameSrc(src)}
+                      t={t}
+                    />
+                  )
+                })}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
+      )}
+
+      {lightbox && (
+        <DuplicateLightbox
+          members={lightbox.members}
+          start={lightbox.start}
+          onClose={() => setLightbox(null)}
+          t={t}
+        />
       )}
 
       {preview && <MediaDetail item={preview as FileItem} onClose={() => setPreview(null)} />}
@@ -369,6 +433,8 @@ function DuplicateCard({
     : [res, formatSize(m.size)]
   if (m.match_count != null) metaParts.push(`${m.match_count}/5 ${t('dup_frames_match')}`)
   if (m.phash_distance != null) metaParts.push(`${t('dup_phash_dist')} ${m.phash_distance}`)
+  if (!isVideo && m.mean_saturation != null)
+    metaParts.push(`${t('dup_saturation')} ${m.mean_saturation.toFixed(2)}`)
   const meta = metaParts.join(' | ')
 
   const openPreview = (e: MouseEvent) => {
@@ -418,6 +484,15 @@ function DuplicateCard({
           alt={m.filename}
           loading="lazy"
           onClick={openPreview}
+          onAuxClick={(e) => {
+            // Middle-click opens the original in a new browser tab for a
+            // side-by-side comparison outside the app.
+            if (e.button === 1) {
+              e.preventDefault()
+              e.stopPropagation()
+              window.open(`/api/media/${m.id}`, '_blank', 'noopener')
+            }
+          }}
           title={t('dup_open_preview')}
           className="mb-[7px] block max-h-40 w-full cursor-zoom-in rounded-md bg-bg object-contain"
         />
@@ -478,6 +553,131 @@ function DuplicateCard({
         </span>
         <span className={selected ? 'text-danger' : 'text-ink-3'}>{t('dup_delete_label')}</span>
       </label>
+    </div>
+  )
+}
+
+/**
+ * Full-screen comparison lightbox over the image members of one duplicate group.
+ * The image is anchored centre-stage, so flipping with ←/→ (or clicking it)
+ * swaps near-identical copies in place — the fastest way to spot the actual
+ * difference. Reads the originals from `/api/media/{id}` and preloads the
+ * neighbours so the flip is instant.
+ */
+function DuplicateLightbox({
+  members,
+  start,
+  onClose,
+  t,
+}: {
+  members: Member[]
+  start: number
+  onClose: () => void
+  t: (k: string) => string
+}) {
+  const [i, setI] = useState(start)
+  const count = members.length
+  const go = (delta: number) => setI((x) => (x + delta + count) % count)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowLeft') setI((x) => (x - 1 + count) % count)
+      else if (e.key === 'ArrowRight') setI((x) => (x + 1) % count)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [count, onClose])
+
+  // Preload the neighbours so ←/→ flips without a load flash.
+  useEffect(() => {
+    for (const j of [(i + 1) % count, (i - 1 + count) % count]) {
+      const img = new Image()
+      img.src = `/api/media/${members[j].id}`
+    }
+  }, [i, count, members])
+
+  const m = members[i]
+  const src = `/api/media/${m.id}`
+  const metaParts: string[] = []
+  if (m.width && m.height) metaParts.push(`${m.width}×${m.height}px`)
+  metaParts.push(formatSize(m.size))
+  if (m.mean_saturation != null) metaParts.push(`${t('dup_saturation')} ${m.mean_saturation.toFixed(2)}`)
+  if (m.phash_distance != null) metaParts.push(`${t('dup_phash_dist')} ${m.phash_distance}`)
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/90" onClick={onClose}>
+      <div
+        className="flex items-center gap-3 px-5 py-3 text-sm text-ink-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="shrink-0 font-mono text-ink-3">
+          {i + 1} / {count}
+        </span>
+        {m.is_keep && (
+          <span className="shrink-0 rounded-full bg-ok/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ok">
+            ✓ {t('dup_keep')}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate" title={m.filename}>
+          {m.filename}
+        </span>
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 rounded-md border border-line px-2 py-0.5 text-ink-3 hover:text-ink-1"
+        >
+          ⧉ {t('dup_lb_new_tab')}
+        </a>
+        <button onClick={onClose} className="shrink-0 text-ink-2 hover:text-ink-1">
+          ✕ {t('close')}
+        </button>
+      </div>
+
+      <div className="relative flex min-h-0 flex-1 items-center justify-center px-14">
+        {count > 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              go(-1)
+            }}
+            aria-label="previous"
+            className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-white/10 px-3 py-2 text-2xl leading-none text-white transition hover:bg-white/20"
+          >
+            ‹
+          </button>
+        )}
+        <img
+          src={src}
+          alt={m.filename}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (count > 1) go(1)
+          }}
+          className="max-h-full max-w-full cursor-pointer rounded-lg object-contain"
+        />
+        {count > 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              go(1)
+            }}
+            aria-label="next"
+            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-white/10 px-3 py-2 text-2xl leading-none text-white transition hover:bg-white/20"
+          >
+            ›
+          </button>
+        )}
+      </div>
+
+      <div
+        className="px-5 py-3 text-center font-mono text-[12px] text-ink-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {metaParts.join(' | ')}
+        {count > 1 && <span className="ml-3 font-sans text-ink-3">{t('dup_lb_hint')}</span>}
+      </div>
     </div>
   )
 }

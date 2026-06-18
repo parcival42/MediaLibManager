@@ -3,6 +3,7 @@ import base64
 from io import BytesIO
 
 import imagehash
+import numpy as np
 from PIL import Image, ImageOps
 
 try:  # HEIC/HEIF support is optional but registered when available.
@@ -41,10 +42,24 @@ def make_preview_b64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def mean_saturation(img: Image.Image) -> float:
+    """Mean HSV saturation (0.0 = greyscale, 1.0 = fully saturated).
+
+    Public because the maintenance colour backfill recomputes the same value
+    from a stored thumbnail for rows enriched before the column existed.
+    """
+    arr = np.array(img.convert("RGB"), dtype=np.float32) / 255.0
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    sat = np.where(mx > 0, (mx - mn) / mx, 0.0)
+    return float(sat.mean())
+
+
 def image_phash_thumb(path: str) -> dict:
-    """Stage 2: perceptual hash and preview thumbnail (decodes the image once)."""
+    """Stage 2: perceptual hash, mean saturation, and preview thumbnail."""
     with Image.open(path) as img:
         img.load()
         phash = str(imagehash.phash(img))
+        saturation = mean_saturation(img)
         thumb = make_thumbnail_b64(img)
-    return {"phash": phash, "thumbnail_b64": thumb}
+    return {"phash": phash, "mean_saturation": saturation, "thumbnail_b64": thumb}

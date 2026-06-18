@@ -32,8 +32,33 @@ def _like_pattern(directory: str | None) -> str | None:
     return escaped + "/%"
 
 
+def _load_ignore_pairs(con) -> set[tuple[int, int]]:
+    rows = con.execute("SELECT file_id_a, file_id_b FROM dedup_ignores").fetchall()
+    return {(r["file_id_a"], r["file_id_b"]) for r in rows}
+
+
+def _apply_ignores(
+    exact_groups: list[tuple[str, list[int]]],
+    ignore_pairs: set[tuple[int, int]],
+) -> list[tuple[str, list[int]]]:
+    """Re-run a mini-DSU over each exact group to honour ignored pairs."""
+    from .bktree import DSU
+    result = []
+    for kind, ids in exact_groups:
+        dsu = DSU()
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                pair = (min(a, b), max(a, b))
+                if pair not in ignore_pairs:
+                    dsu.union(a, b)
+        for sub in dsu.groups(min_size=2):
+            result.append((kind, sub))
+    return result
+
+
 def rebuild(ctx, directory: str | None = None) -> dict:
     threshold = int(config.get("phash_threshold"))
+    grey_cutoff = float(config.get("color_threshold"))
     frame_threshold = int(config.get("video_frame_threshold"))
     min_matches = int(config.get("video_min_matches"))
     duration_tolerance = float(config.get("duration_tolerance"))
@@ -46,6 +71,7 @@ def rebuild(ctx, directory: str | None = None) -> dict:
 
     con = db.connect()
     try:
+        ignore_pairs = _load_ignore_pairs(con)
         claimed: set[int] = set()
 
         def claim(groups: list[list[int]]) -> None:
@@ -53,20 +79,23 @@ def rebuild(ctx, directory: str | None = None) -> dict:
                 claimed.update(g)
 
         ctx.log("Finding exact (MD5) duplicates…")
-        exact_groups = exact.find_exact_groups(con, pattern)
+        exact_groups_raw = exact.find_exact_groups(con, pattern)
+        exact_groups = _apply_ignores(exact_groups_raw, ignore_pairs)
         claim(ids for _, ids in exact_groups)
         ctx.progress(25)
         ctx.raise_if_cancelled()
 
         ctx.log("Finding visually similar images…")
-        image_groups = visual.find_image_groups(con, threshold, claimed, pattern)
+        image_groups = visual.find_image_groups(
+            con, threshold, grey_cutoff, claimed, ignore_pairs, pattern
+        )
         claim(image_groups)
         ctx.progress(50)
         ctx.raise_if_cancelled()
 
         ctx.log("Finding similar videos (5-frame)…")
         video_groups = visual.find_video_groups(
-            con, frame_threshold, min_matches, duration_tolerance, claimed, pattern
+            con, frame_threshold, min_matches, duration_tolerance, claimed, ignore_pairs, pattern
         )
         claim(video_groups)
         ctx.progress(75)
@@ -75,7 +104,7 @@ def rebuild(ctx, directory: str | None = None) -> dict:
         if deep_enabled:
             ctx.log("Finding similar videos (deep compare)…")
             deep_groups = visual.find_deep_groups(
-                con, deep_threshold, deep_min_fraction, claimed, pattern
+                con, deep_threshold, deep_min_fraction, claimed, ignore_pairs, pattern
             )
         else:
             ctx.log("Deep compare disabled — skipping.")

@@ -143,6 +143,7 @@ function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settin
 
 const DUPLICATE_FIELDS: { key: string; labelKey: string }[] = [
   { key: 'phash_threshold', labelKey: 'settings_field_phash_threshold' },
+  { key: 'color_threshold', labelKey: 'settings_field_color_threshold' },
   { key: 'video_frame_threshold', labelKey: 'settings_field_video_frame_threshold' },
   { key: 'video_min_matches', labelKey: 'settings_field_video_min_matches' },
   { key: 'duration_tolerance', labelKey: 'settings_field_duration_tolerance' },

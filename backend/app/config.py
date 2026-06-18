@@ -21,6 +21,7 @@ DEFAULTS = {
     "deep_enabled":          True,   # run the deep (edge-block) video pass at all
     "deep_threshold":        10,     # Hamming distance per deep-compare edge frame
     "deep_min_fraction":     0.3,    # fraction of a block's frames that must match
+    "color_threshold":       0.05,   # mean saturation at/below this = greyscale (B/W); colour and B/W versions never group
     "worker_count":          4,      # parallel threads during enrichment
 }
 

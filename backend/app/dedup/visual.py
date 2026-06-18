@@ -25,7 +25,9 @@ from .bktree import BKTree, DSU, hamming, parse_hash
 def find_image_groups(
     con: sqlite3.Connection,
     threshold: int,
+    grey_cutoff: float,
     exclude: set[int],
+    ignore_pairs: set[tuple[int, int]],
     directory_pattern: str | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'image' AND phash IS NOT NULL AND phash != ''"
@@ -33,24 +35,44 @@ def find_image_groups(
     if directory_pattern:
         where += " AND path LIKE ? ESCAPE '\\'"
         params.append(directory_pattern)
-    rows = con.execute(f"SELECT id, phash FROM files WHERE {where}", params).fetchall()
+    rows = con.execute(
+        f"SELECT id, phash, mean_saturation FROM files WHERE {where}", params
+    ).fetchall()
 
     tree = BKTree()
-    items: list[tuple[int, int]] = []
+    items: list[tuple[int, int, float | None]] = []
+    sat_map: dict[int, float | None] = {}
     for r in rows:
         if r["id"] in exclude:
             continue
         h = parse_hash(r["phash"])
         if h is None:
             continue
-        items.append((r["id"], h))
+        sat = r["mean_saturation"]
+        items.append((r["id"], h, sat))
+        sat_map[r["id"]] = sat
         tree.add(h, r["id"])
 
     dsu = DSU()
-    for fid, h in items:
+    for fid, h, sat in items:
         for other in tree.query(h, threshold):
-            if other != fid:
-                dsu.union(fid, other)
+            if other == fid:
+                continue
+            pair = (min(fid, other), max(fid, other))
+            if pair in ignore_pairs:
+                continue
+            # Colour gate: pHash drops colour (it hashes only luminance), so a
+            # colour image and its black-and-white version reach distance 0.
+            # Mean saturation reliably separates only "colourful" vs "greyscale"
+            # — its *magnitude* is low even for colour photos (skin, neutral
+            # backgrounds), so we classify each image as greyscale (saturation
+            # at/below grey_cutoff) or colour and refuse to union across that
+            # boundary, rather than thresholding the difference.
+            other_sat = sat_map.get(other)
+            if sat is not None and other_sat is not None:
+                if (sat <= grey_cutoff) != (other_sat <= grey_cutoff):
+                    continue
+            dsu.union(fid, other)
     return dsu.groups(min_size=2)
 
 
@@ -65,6 +87,7 @@ def find_video_groups(
     min_matches: int,
     duration_tolerance: float,
     exclude: set[int],
+    ignore_pairs: set[tuple[int, int]],
     directory_pattern: str | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'video' AND frame_hashes IS NOT NULL"
@@ -99,6 +122,9 @@ def find_video_groups(
             if dur_i is not None and dur_j is not None:
                 if dur_j - dur_i > duration_tolerance:
                     break  # all later j are even farther apart (sorted ascending)
+            pair = (min(id_i, id_j), max(id_i, id_j))
+            if pair in ignore_pairs:
+                continue
             if _frame_matches(fr_i, fr_j, frame_threshold) >= min_matches:
                 dsu.union(id_i, id_j)
     return dsu.groups(min_size=2)
@@ -118,6 +144,7 @@ def find_deep_groups(
     threshold: int,
     min_fraction: float,
     exclude: set[int],
+    ignore_pairs: set[tuple[int, int]],
     directory_pattern: str | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'video' AND edge_hashes IS NOT NULL"
@@ -146,6 +173,9 @@ def find_deep_groups(
         id_i, start_i, end_i = vids[i]
         for j in range(i + 1, n):
             id_j, start_j, end_j = vids[j]
+            pair = (min(id_i, id_j), max(id_i, id_j))
+            if pair in ignore_pairs:
+                continue
             if _block_matches(start_i, start_j, threshold, min_fraction) or \
                _block_matches(end_i, end_j, threshold, min_fraction):
                 dsu.union(id_i, id_j)

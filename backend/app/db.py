@@ -46,6 +46,17 @@ CREATE INDEX IF NOT EXISTS idx_files_md5    ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_type   ON files(type);
 CREATE INDEX IF NOT EXISTS idx_files_size   ON files(size);
 
+-- Pairs of files the user has marked as "not duplicates". Stored as normalised
+-- (file_id_a < file_id_b) edges; the rebuild skips DSU unions for these pairs.
+-- Survives every rebuild because it is independent of duplicate_groups/members.
+CREATE TABLE IF NOT EXISTS dedup_ignores (
+    file_id_a INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    file_id_b INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    ignored_at REAL,
+    PRIMARY KEY (file_id_a, file_id_b),
+    CHECK (file_id_a < file_id_b)
+);
+
 -- Derived duplicate groups
 CREATE TABLE IF NOT EXISTS duplicate_groups (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,8 +150,9 @@ def connect() -> sqlite3.Connection:
 # Columns added to `files` after the initial schema shipped. Applied on startup
 # so existing databases pick them up without a manual migration.
 _ADDED_FILE_COLUMNS = {
-    "frames_b64": "TEXT",
-    "edge_hashes": "TEXT",
+    "frames_b64":      "TEXT",
+    "edge_hashes":     "TEXT",
+    "mean_saturation": "REAL",
 }
 
 

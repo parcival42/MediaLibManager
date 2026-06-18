@@ -152,8 +152,11 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   dup_delete_label: { de: 'Löschen', en: 'Delete' },
   dup_duplicate_label: { de: 'Duplikat', en: 'Duplicate' },
   dup_no_preview: { de: 'Keine Vorschau', en: 'No preview' },
-  dup_open_preview: { de: 'Öffnen / abspielen', en: 'Open / play' },
+  dup_open_preview: { de: 'Klick: Vergleich · Mittelklick: neuer Tab', en: 'Click: compare · middle-click: new tab' },
+  dup_lb_new_tab: { de: 'Neuer Tab', en: 'New tab' },
+  dup_lb_hint: { de: '← → zum Wechseln · Esc schließt', en: '← → to switch · Esc closes' },
   dup_phash_dist: { de: 'pHash-Distanz', en: 'pHash distance' },
+  dup_saturation: { de: 'Sättigung', en: 'Saturation' },
   dup_frames_match: { de: 'Frames gleich', en: 'frames match' },
   dup_select_others: { de: 'Alle Vorschläge selektieren', en: 'Select all suggestions' },
   dup_deselect_all: { de: 'Auswahl aufheben', en: 'Clear selection' },
@@ -163,6 +166,17 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   dup_delete_confirm: {
     de: 'Ausgewählte Dateien endgültig von der Festplatte löschen?',
     en: 'Permanently delete the selected files from disk?',
+  },
+
+  dup_ignore_group: { de: 'Keine Duplikate', en: 'Not duplicates' },
+  dup_ignore_group_pending: { de: 'Wird ignoriert …', en: 'Ignored — rebuild to remove' },
+  dup_ignore_group_hint: {
+    de: 'Diese Gruppe beim nächsten Suchlauf dauerhaft ignorieren. Neue ähnliche Dateien werden weiterhin gefunden.',
+    en: 'Permanently ignore this group on the next scan. New similar files will still be detected.',
+  },
+  dup_ignore_confirm: {
+    de: 'Diese Gruppe als "keine Duplikate" markieren? Beim nächsten Suchlauf wird sie nicht mehr erscheinen.',
+    en: 'Mark this group as "not duplicates"? It will not appear on the next scan.',
   },
 
   dup_scope_choose: { de: 'Verzeichnis wählen', en: 'Choose directory' },
@@ -274,6 +288,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   settings_field_duration_tolerance: { de: 'Dauertoleranz (s)', en: 'Duration tolerance (s)' },
   settings_field_deep_threshold: { de: 'Deep-Compare-Schwellwert (Hamming)', en: 'Deep compare threshold (Hamming)' },
   settings_field_deep_min_fraction: { de: 'Deep-Compare min. Trefferquote (0–1)', en: 'Deep compare min. match fraction (0–1)' },
+  settings_field_color_threshold: { de: 'Graustufen-Schwelle (Sättigung ≤ = S/W, 0–1)', en: 'Greyscale cutoff (saturation ≤ = B/W, 0–1)' },
   settings_maintenance_title: { de: 'Datenbank-Wartung', en: 'Database maintenance' },
   maint_subtitle: {
     de: 'Prüft für jeden Datenbank-Eintrag, ob die Datei noch auf der Festplatte existiert, und entfernt fehlende Einträge endgültig aus der Datenbank.',
@@ -289,6 +304,18 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   },
   maint_result_checked: { de: 'Geprüft:', en: 'Checked:' },
   maint_result_removed: { de: 'Entfernt:', en: 'Removed:' },
+
+  maint_color_title: { de: 'Farbdaten nachberechnen', en: 'Backfill colour data' },
+  maint_color_subtitle: {
+    de: 'Berechnet den Farbwert (Sättigung) für Bilder, die vor Einführung dieser Funktion verarbeitet wurden — aus dem gespeicherten Vorschaubild, ohne die Originaldateien zu lesen. Nötig, damit Farb- und Schwarz-Weiß-Versionen nicht mehr als Duplikate gelten.',
+    en: 'Computes the colour value (saturation) for images processed before this feature existed — from the stored thumbnail, without reading the original files. Required so colour and black-and-white versions are no longer treated as duplicates.',
+  },
+  maint_color_run: { de: 'Farbdaten nachberechnen', en: 'Backfill colour data' },
+  maint_color_running: { de: 'Berechne…', en: 'Computing…' },
+  maint_color_pending: { de: 'Bilder ohne Farbwert', en: 'images without colour value' },
+  maint_color_none: { de: 'Alle Bilder haben Farbdaten.', en: 'All images have colour data.' },
+  maint_color_filled: { de: 'Berechnet:', en: 'Filled:' },
+  maint_color_failed: { de: 'Fehlgeschlagen:', en: 'Failed:' },
 
   ren_assignments_title: { de: 'Zuordnungen', en: 'Assignments' },
   ren_assignments_subtitle: {
