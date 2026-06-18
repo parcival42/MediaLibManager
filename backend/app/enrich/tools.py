@@ -134,6 +134,44 @@ def has_title_or_comment(path: str) -> bool:
     return bool(out.strip())
 
 
+# The two tags the strip feature removes -- the only ones we ever read for
+# display, so what's shown is exactly what will be removed. Order is fixed.
+_DISPLAY_TAGS = ("Title", "Comment")
+
+
+def read_title_comment(paths: list[str]) -> dict[str, list[dict]]:
+    """Read the Title/Comment values for many files in one exiftool process.
+
+    Returns ``{path: [{"name", "value"}, ...]}`` keyed by the exact path passed
+    in (matched via exiftool's echoed ``SourceFile``, so a file exiftool skips
+    can't misalign the rest), listing only the tags actually present and
+    non-empty. A single ``-j`` (JSON) call over the whole batch keeps this cheap
+    even for long candidate lists; ``-j`` also disambiguates which value belongs
+    to which tag, which the plain ``-s3`` form cannot.
+    """
+    if not paths:
+        return {}
+    out = _run(["exiftool", "-j", "-Title", "-Comment", *paths], PROBE_TIMEOUT)
+    try:
+        records = json.loads(out)
+    except json.JSONDecodeError:
+        raise ToolError("exiftool returned no parseable output")
+
+    result: dict[str, list[dict]] = {}
+    for rec in records:
+        source = rec.get("SourceFile")
+        if not source:
+            continue
+        fields = []
+        for tag in _DISPLAY_TAGS:
+            value = rec.get(tag)
+            if value is not None and str(value).strip():
+                fields.append({"name": tag, "value": str(value)})
+        if fields:
+            result[source] = fields
+    return result
+
+
 def strip_title_comment(path: str) -> str:
     """Remove the Title/Comment tags via exiftool, in place.
 

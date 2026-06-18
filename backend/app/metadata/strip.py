@@ -1,8 +1,10 @@
 """Title/Comment metadata stripping with backup + multi-stage integrity check.
 
-Mirrors ``dedup/delete.py``'s shape: ``candidates`` is a pure read over the
-already-enriched ``files`` rows; ``apply_strip`` touches the filesystem and
-runs through the serial task queue.
+Mirrors ``dedup/delete.py``'s shape: ``candidates`` reads the already-enriched
+``files`` rows and then does one batched exiftool call to surface the live
+Title/Comment values (the flag in ``files`` only records *that* such a tag
+exists); ``apply_strip`` touches the filesystem and runs through the serial
+task queue.
 
 The integrity check reuses the dedup module's Hamming-distance code
 (``bktree.hamming``/``parse_hash``) and the same five frame positions used
@@ -65,6 +67,15 @@ def candidates(directory: str | None = None) -> list[dict]:
     finally:
         con.close()
 
+    # The flag in `files` only says *that* a Title/Comment exists; read the
+    # actual field names + values live (one batched exiftool call) so the UI can
+    # show exactly what a strip would remove. A read failure degrades to an
+    # empty field list rather than dropping the candidate.
+    try:
+        fields_by_path = tools.read_title_comment([r["path"] for r in rows])
+    except tools.ToolError:
+        fields_by_path = {}
+
     out = []
     for r in rows:
         out.append({
@@ -73,6 +84,7 @@ def candidates(directory: str | None = None) -> list[dict]:
             "filename": os.path.basename(r["path"]),
             "size": r["size"],
             "duration": r["duration"],
+            "fields": fields_by_path.get(r["path"], []),
         })
     return out
 

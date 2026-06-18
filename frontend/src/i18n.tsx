@@ -258,6 +258,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     de: 'Keine Kandidaten. Entweder gibt es keine Title-/Comment-Tags, oder die Anreicherung läuft noch.',
     en: 'No candidates. Either nothing carries a Title/Comment tag, or enrichment is still catching up.',
   },
+  md_no_fields: {
+    de: 'Felder nicht lesbar (evtl. extern bereits entfernt)',
+    en: 'Fields unreadable (may already be stripped externally)',
+  },
   md_history: { de: 'Verlauf', en: 'History' },
   md_status_ok: { de: 'OK', en: 'OK' },
   md_status_failed: { de: 'Fehlgeschlagen', en: 'Failed' },

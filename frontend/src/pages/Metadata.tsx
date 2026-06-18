@@ -7,12 +7,18 @@ import { Button, EmptyState, PageHeader } from '../components/ui'
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
 
+interface MetaField {
+  name: string
+  value: string
+}
+
 interface Candidate {
   id: number
   path: string
   filename: string
   size: number
   duration?: number
+  fields: MetaField[]
 }
 
 interface HistoryItem {
@@ -197,20 +203,38 @@ export default function Metadata() {
           {candidates.map((c) => (
             <label
               key={c.id}
-              className="flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5"
+              className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5"
             >
               <input
                 type="checkbox"
                 checked={selected.has(c.id)}
                 onChange={() => toggle(c.id)}
-                className="h-3.5 w-3.5 shrink-0"
+                className="mt-1 h-3.5 w-3.5 shrink-0"
               />
-              <span className="min-w-0 flex-1 truncate text-ink-1" title={c.path}>
-                {c.filename}
-              </span>
-              <span className="shrink-0 font-mono text-xs text-ink-3">
-                {c.duration ? formatDuration(c.duration) : '?'} · {formatSize(c.size)}
-              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-3">
+                  <span className="min-w-0 flex-1 truncate text-ink-1" title={c.path}>
+                    {c.filename}
+                  </span>
+                  <span className="shrink-0 font-mono text-xs text-ink-3">
+                    {c.duration ? formatDuration(c.duration) : '?'} · {formatSize(c.size)}
+                  </span>
+                </div>
+                {c.fields.length > 0 ? (
+                  <div className="mt-1 space-y-0.5">
+                    {c.fields.map((f) => (
+                      <div key={f.name} className="flex gap-2 text-xs">
+                        <span className="shrink-0 font-medium text-ink-3">{f.name}</span>
+                        <span className="min-w-0 flex-1 truncate text-ink-2" title={f.value}>
+                          {f.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs italic text-ink-3">{t('md_no_fields')}</div>
+                )}
+              </div>
             </label>
           ))}
         </div>
