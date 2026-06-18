@@ -168,16 +168,14 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     en: 'Permanently delete the selected files from disk?',
   },
 
-  dup_ignore_group: { de: 'Keine Duplikate', en: 'Not duplicates' },
-  dup_ignore_group_pending: { de: 'Wird ignoriert …', en: 'Ignored — rebuild to remove' },
+  dup_ignore_group: { de: 'Gruppe ignorieren', en: 'Ignore group' },
+  dup_ignore_group_undo: { de: 'Ignoriert — rückgängig', en: 'Ignored — undo' },
   dup_ignore_group_hint: {
-    de: 'Diese Gruppe beim nächsten Suchlauf dauerhaft ignorieren. Neue ähnliche Dateien werden weiterhin gefunden.',
-    en: 'Permanently ignore this group on the next scan. New similar files will still be detected.',
+    de: 'Diese Gruppe beim nächsten Suchlauf ignorieren. Nochmal klicken macht es rückgängig. Neue ähnliche Dateien werden weiterhin gefunden.',
+    en: 'Ignore this group on the next scan. Click again to undo. New similar files will still be detected.',
   },
-  dup_ignore_confirm: {
-    de: 'Diese Gruppe als "keine Duplikate" markieren? Beim nächsten Suchlauf wird sie nicht mehr erscheinen.',
-    en: 'Mark this group as "not duplicates"? It will not appear on the next scan.',
-  },
+  dup_select_group: { de: 'Gruppe auswählen', en: 'Select group' },
+  dup_ignore_selected: { de: 'Ausgewählte ignorieren', en: 'Ignore selected' },
 
   dup_scope_choose: { de: 'Verzeichnis wählen', en: 'Choose directory' },
   dup_scope_all: { de: 'Gesamte Bibliothek', en: 'Entire library' },
@@ -316,6 +314,18 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   maint_color_none: { de: 'Alle Bilder haben Farbdaten.', en: 'All images have colour data.' },
   maint_color_filled: { de: 'Berechnet:', en: 'Filled:' },
   maint_color_failed: { de: 'Fehlgeschlagen:', en: 'Failed:' },
+
+  maint_ignores_title: { de: 'Ignorierte Gruppen', en: 'Ignored groups' },
+  maint_ignores_subtitle: {
+    de: 'Gruppen, die du über „Gruppe ignorieren" als keine Duplikate markiert hast. Sie bleiben bei jedem Suchlauf ausgeblendet. Der Reset löscht die gesamte Ignorier-Liste — die Gruppen erscheinen beim nächsten Suchlauf wieder.',
+    en: 'Groups you marked as non-duplicates via "Ignore group". They stay hidden on every scan. Reset clears the entire ignore list — those groups reappear on the next scan.',
+  },
+  maint_ignores_count: { de: 'ignorierte Gruppen', en: 'ignored groups' },
+  maint_ignores_reset: { de: 'Ignorier-Liste zurücksetzen', en: 'Reset ignore list' },
+  maint_ignores_confirm: {
+    de: 'Die gesamte Ignorier-Liste löschen? Alle ignorierten Gruppen erscheinen beim nächsten Suchlauf wieder.',
+    en: 'Clear the entire ignore list? All ignored groups will reappear on the next scan.',
+  },
 
   ren_assignments_title: { de: 'Zuordnungen', en: 'Assignments' },
   ren_assignments_subtitle: {

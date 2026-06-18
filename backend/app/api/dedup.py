@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from .. import auth, config, db, paths
 from ..dedup import delete as dedup_delete
 from ..dedup import rebuild as dedup_rebuild
-from ..dedup.bktree import hamming, parse_hash
+from ..dedup.bktree import DSU, hamming, parse_hash
 from ..tasks import runner
 
 router = APIRouter(prefix="/api")
@@ -169,6 +169,53 @@ def ignore_group(req: IgnoreRequest, _: str = Depends(auth.current_user)):
     con.commit()
     con.close()
     return {"pairs_added": len(pairs)}
+
+
+@router.post("/duplicates/unignore")
+def unignore_group(req: IgnoreRequest, _: str = Depends(auth.current_user)):
+    """Reverse an ``ignore_group`` call — remove the C(N,2) pairs of this group
+    from the ignore list so it is detected again on the next rebuild."""
+    if len(req.file_ids) < 2:
+        raise HTTPException(status_code=400, detail="need at least 2 files")
+    ids = sorted(req.file_ids)
+    pairs = [
+        (ids[i], ids[j])
+        for i in range(len(ids))
+        for j in range(i + 1, len(ids))
+    ]
+    con = db.connect()
+    con.executemany(
+        "DELETE FROM dedup_ignores WHERE file_id_a = ? AND file_id_b = ?", pairs
+    )
+    con.commit()
+    con.close()
+    return {"pairs_removed": len(pairs)}
+
+
+@router.get("/duplicates/ignores")
+def ignore_stats(_: str = Depends(auth.current_user)):
+    """Summary of the persisted ignore list. ``groups`` is the number of
+    connected components of the ignored-pair graph — i.e. how many distinct
+    ignored clusters there are (a single ignore action stores all C(N,2) pairs
+    of one group, which form one component)."""
+    con = db.connect()
+    rows = con.execute("SELECT file_id_a, file_id_b FROM dedup_ignores").fetchall()
+    con.close()
+    dsu = DSU()
+    for r in rows:
+        dsu.union(r["file_id_a"], r["file_id_b"])
+    return {"pairs": len(rows), "groups": len(dsu.groups(min_size=2))}
+
+
+@router.post("/duplicates/ignores/reset")
+def reset_ignores(_: str = Depends(auth.current_user)):
+    """Clear the whole ignore list. Previously ignored groups reappear on the
+    next rebuild ('Find duplicates')."""
+    con = db.connect()
+    cur = con.execute("DELETE FROM dedup_ignores")
+    con.commit()
+    con.close()
+    return {"cleared": cur.rowcount}
 
 
 class DeleteRequest(BaseModel):

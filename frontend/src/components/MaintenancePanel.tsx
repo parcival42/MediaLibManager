@@ -30,6 +30,11 @@ interface BackfillResult {
   failed: number
 }
 
+interface IgnoreStats {
+  pairs: number
+  groups: number
+}
+
 interface Task<R> {
   status: string
   progress: number
@@ -101,6 +106,21 @@ export default function MaintenancePanel() {
   const backfilling = backfillMut.isPending || backfillTask.data?.status === 'running'
   const pending = stats.data?.color_backfill_pending ?? 0
 
+  // Ignored duplicate groups ("Ignore group" action in the duplicates view).
+  const ignores = useQuery<IgnoreStats>({
+    queryKey: ['dedup-ignores'],
+    queryFn: () => api('/api/duplicates/ignores'),
+  })
+  const resetIgnoresMut = useMutation({
+    mutationFn: () => api('/api/duplicates/ignores/reset', { method: 'POST' }),
+    onSuccess: () => ignores.refetch(),
+  })
+  const ignoredGroups = ignores.data?.groups ?? 0
+  const onResetIgnores = () => {
+    if (!window.confirm(t('maint_ignores_confirm'))) return
+    resetIgnoresMut.mutate()
+  }
+
   return (
     <Card className="max-w-2xl p-6">
       <p className="mb-4 text-sm text-ink-3">{t('maint_subtitle')}</p>
@@ -156,6 +176,26 @@ export default function MaintenancePanel() {
             {backfillResult.failed > 0 ? ` · ${t('maint_color_failed')} ${backfillResult.failed.toLocaleString()}` : ''}
           </p>
         )}
+      </div>
+
+      <div className="mt-8 border-t border-line pt-6">
+        <p className="mb-1 text-sm font-medium text-ink-1">{t('maint_ignores_title')}</p>
+        <p className="mb-4 text-sm text-ink-3">{t('maint_ignores_subtitle')}</p>
+
+        <div className="mb-5 flex gap-6">
+          <div>
+            <div className="text-2xl font-semibold text-ink-1">{ignoredGroups.toLocaleString()}</div>
+            <div className="text-xs text-ink-3">{t('maint_ignores_count')}</div>
+          </div>
+        </div>
+
+        <Button
+          onClick={onResetIgnores}
+          disabled={resetIgnoresMut.isPending || ignoredGroups === 0}
+          variant="danger"
+        >
+          {t('maint_ignores_reset')}
+        </Button>
       </div>
     </Card>
   )

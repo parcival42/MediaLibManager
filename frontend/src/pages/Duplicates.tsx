@@ -184,12 +184,17 @@ export default function Duplicates() {
     deleteMut.mutate([...selected])
   }
 
-  // Groups marked "not duplicates" this session — kept in local state so they
-  // survive kind-filter switches. The group stays visible (server hasn't rebuilt
-  // yet) but is dimmed with an "ignored" banner. On the next rebuild it is gone.
+  // Groups ignored this session — kept in local state so they survive kind-filter
+  // switches. An ignored group stays visible (the server hasn't rebuilt yet) but
+  // is dimmed; on the next rebuild it is gone. The ignore is persisted server-side
+  // immediately and can be toggled back off (un-ignore) until then.
   const [ignoredGroupIds, setIgnoredGroupIds] = useState<Set<number>>(new Set())
+  // Group-level multi-select for the bulk "ignore selected" action (separate
+  // from the per-file `selected` set used for deletion).
+  const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set())
   useEffect(() => {
     setIgnoredGroupIds(new Set())
+    setSelectedGroups(new Set())
   }, [list.data])
 
   const ignoreMut = useMutation({
@@ -203,9 +208,43 @@ export default function Duplicates() {
     },
   })
 
-  const onIgnoreGroup = (g: Group) => {
-    if (!window.confirm(t('dup_ignore_confirm'))) return
-    ignoreMut.mutate({ fileIds: g.members.map((m) => m.id), groupId: g.id })
+  const unignoreMut = useMutation({
+    mutationFn: ({ fileIds }: { fileIds: number[]; groupId: number }) =>
+      api('/api/duplicates/unignore', {
+        method: 'POST',
+        body: JSON.stringify({ file_ids: fileIds }),
+      }),
+    onSuccess: (_data, variables) => {
+      setIgnoredGroupIds((prev) => {
+        const next = new Set(prev)
+        next.delete(variables.groupId)
+        return next
+      })
+    },
+  })
+
+  // Toggle: ignore an active group, or undo the ignore if it is already ignored.
+  const onToggleIgnore = (g: Group) => {
+    const fileIds = g.members.map((m) => m.id)
+    if (ignoredGroupIds.has(g.id)) unignoreMut.mutate({ fileIds, groupId: g.id })
+    else ignoreMut.mutate({ fileIds, groupId: g.id })
+  }
+
+  const toggleGroupSelected = (id: number) =>
+    setSelectedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const onIgnoreSelectedGroups = () => {
+    for (const g of groups) {
+      if (selectedGroups.has(g.id) && !ignoredGroupIds.has(g.id)) {
+        ignoreMut.mutate({ fileIds: g.members.map((m) => m.id), groupId: g.id })
+      }
+    }
+    setSelectedGroups(new Set())
   }
 
   return (
@@ -314,6 +353,21 @@ export default function Duplicates() {
             {deleting ? t('dup_deleting') : `${t('dup_delete')} (${selected.size})`}
           </Button>
         )}
+        {selectedGroups.size > 0 && (
+          <div className="ml-auto flex items-center gap-3">
+            <Button size="sm" variant="subtle" onClick={() => setSelectedGroups(new Set())}>
+              {t('dup_deselect_all')}
+            </Button>
+            <Button
+              size="sm"
+              variant="subtle"
+              onClick={onIgnoreSelectedGroups}
+              disabled={ignoreMut.isPending}
+            >
+              {`${t('dup_ignore_selected')} (${selectedGroups.size})`}
+            </Button>
+          </div>
+        )}
       </div>
 
       {groups.length === 0 && !list.isLoading ? (
@@ -331,20 +385,27 @@ export default function Duplicates() {
                 <span className="text-ink-3">
                   {g.members.length} · {formatSize(g.reclaimable)} {t('dup_reclaimable')}
                 </span>
-                {isIgnored ? (
-                  <span className="ml-auto rounded-md border border-line px-2 py-0.5 text-ink-3">
-                    {t('dup_ignore_group_pending')}
-                  </span>
-                ) : (
-                <button
-                  onClick={() => onIgnoreGroup(g)}
-                  disabled={ignoreMut.isPending}
-                  title={t('dup_ignore_group_hint')}
-                  className="ml-auto rounded-md border border-line px-2 py-0.5 text-ink-3 transition hover:border-ink-3 hover:text-ink-1 disabled:opacity-40"
-                >
-                  {t('dup_ignore_group')}
-                </button>
-                )}
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    onClick={() => onToggleIgnore(g)}
+                    disabled={ignoreMut.isPending || unignoreMut.isPending}
+                    title={t('dup_ignore_group_hint')}
+                    className={`rounded-md border px-2 py-0.5 transition disabled:opacity-40 ${
+                      isIgnored
+                        ? 'border-accent/40 text-accent hover:border-accent hover:text-accent'
+                        : 'border-line text-ink-3 hover:border-ink-3 hover:text-ink-1'
+                    }`}
+                  >
+                    {isIgnored ? t('dup_ignore_group_undo') : t('dup_ignore_group')}
+                  </button>
+                  <input
+                    type="checkbox"
+                    checked={selectedGroups.has(g.id)}
+                    onChange={() => toggleGroupSelected(g.id)}
+                    title={t('dup_select_group')}
+                    className="cursor-pointer"
+                  />
+                </div>
               </div>
               <div className="flex flex-wrap gap-3">
                 {g.members.map((m) => {
