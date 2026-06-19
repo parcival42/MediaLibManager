@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from .. import auth, db
+from ..rename.engine import seed_rename_defaults
 
 router = APIRouter(prefix="/api")
 
@@ -16,6 +17,12 @@ router = APIRouter(prefix="/api")
 class Credentials(BaseModel):
     username: str
     password: str
+
+
+class SetupIn(BaseModel):
+    username: str
+    password: str
+    install_rename_defaults: bool = True
 
 
 def _user_count() -> int:
@@ -34,19 +41,21 @@ def auth_check(request: Request):
 
 
 @router.post("/auth/initial-setup")
-def initial_setup(creds: Credentials, response: Response):
+def initial_setup(req: SetupIn, response: Response):
     if _user_count() > 0:
         raise HTTPException(status_code=409, detail="setup already completed")
-    password_hash, salt = auth.hash_password(creds.password)
+    password_hash, salt = auth.hash_password(req.password)
     con = db.connect()
     con.execute(
         "INSERT INTO users(username, password_hash, salt, created_at) VALUES(?, ?, ?, ?)",
-        (creds.username, password_hash, salt, time.time()),
+        (req.username, password_hash, salt, time.time()),
     )
+    if req.install_rename_defaults:
+        seed_rename_defaults(con)
     con.commit()
     con.close()
-    auth.set_cookie(response, auth.make_token(creds.username))
-    return {"ok": True, "username": creds.username}
+    auth.set_cookie(response, auth.make_token(req.username))
+    return {"ok": True, "username": req.username}
 
 
 @router.post("/login")

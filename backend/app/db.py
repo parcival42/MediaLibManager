@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
+-- User-defined strip filters (applied per filename segment in rename rules)
+CREATE TABLE IF NOT EXISTS strip_filters (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    name    TEXT NOT NULL,
+    type    TEXT NOT NULL,   -- 'strings' | 'chars'
+    entries TEXT NOT NULL    -- JSON array of strings
+);
+
 -- Rename rules (building blocks) + per-directory assignment
 CREATE TABLE IF NOT EXISTS rename_rules (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

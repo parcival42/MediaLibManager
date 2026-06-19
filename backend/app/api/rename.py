@@ -16,6 +16,7 @@ from ..tasks import runner
 router = APIRouter(prefix="/api/rename")
 
 ALLOWED_SOURCES = {"literal", "dirname", "resolution", "duration", "filename"}
+ALLOWED_FILTER_TYPES = {"strings", "replace_chars"}
 
 
 def _validate_segments(segments: list[dict]) -> None:
@@ -26,10 +27,73 @@ def _validate_segments(segments: list[dict]) -> None:
             raise HTTPException(status_code=400, detail=f"invalid segment source: {seg.get('source')}")
 
 
+class StripFilterIn(BaseModel):
+    name: str
+    type: str
+    entries: list
+
+
 class RuleIn(BaseModel):
     name: str
     segments: list[dict]
     separator: str = " - "
+
+
+@router.get("/strip-filters")
+def list_strip_filters(_: str = Depends(auth.current_user)):
+    con = db.connect()
+    rows = con.execute("SELECT id, name, type, entries FROM strip_filters ORDER BY name").fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["entries"] = json.loads(d["entries"])
+        out.append(d)
+    return out
+
+
+@router.post("/strip-filters")
+def create_strip_filter(req: StripFilterIn, _: str = Depends(auth.current_user)):
+    if req.type not in ALLOWED_FILTER_TYPES:
+        raise HTTPException(status_code=400, detail=f"invalid filter type: {req.type}")
+    con = db.connect()
+    cur = con.execute(
+        "INSERT INTO strip_filters(name, type, entries) VALUES(?, ?, ?)",
+        (req.name, req.type, json.dumps(req.entries)),
+    )
+    con.commit()
+    filter_id = cur.lastrowid
+    con.close()
+    return {"id": filter_id}
+
+
+@router.put("/strip-filters/{filter_id}")
+def update_strip_filter(filter_id: int, req: StripFilterIn, _: str = Depends(auth.current_user)):
+    if req.type not in ALLOWED_FILTER_TYPES:
+        raise HTTPException(status_code=400, detail=f"invalid filter type: {req.type}")
+    con = db.connect()
+    cur = con.execute(
+        "UPDATE strip_filters SET name = ?, type = ?, entries = ? WHERE id = ?",
+        (req.name, req.type, json.dumps(req.entries), filter_id),
+    )
+    con.commit()
+    found = cur.rowcount > 0
+    con.close()
+    if not found:
+        raise HTTPException(status_code=404, detail="strip filter not found")
+    return {"ok": True}
+
+
+@router.delete("/strip-filters/{filter_id}")
+def delete_strip_filter(filter_id: int, _: str = Depends(auth.current_user)):
+    con = db.connect()
+    cur = con.execute("DELETE FROM strip_filters WHERE id = ?", (filter_id,))
+    con.commit()
+    found = cur.rowcount > 0
+    con.close()
+    if not found:
+        raise HTTPException(status_code=404, detail="strip filter not found")
+    return {"ok": True}
 
 
 @router.get("/rules")

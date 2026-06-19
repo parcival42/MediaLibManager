@@ -19,6 +19,7 @@ interface Segment {
   text?: string
   level?: number
   transforms?: string[]
+  strip_filter_ids?: number[]
 }
 
 interface Rule {
@@ -35,17 +36,37 @@ interface Assignment {
   rule_name: string
 }
 
+interface ReplaceEntry {
+  from: string
+  to: string
+}
+
+interface StripFilter {
+  id: number
+  name: string
+  type: 'strings' | 'replace_chars'
+  entries: string[] | ReplaceEntry[]
+}
+
 const SOURCES: SegmentSource[] = ['dirname', 'resolution', 'duration', 'filename', 'literal']
 
 function emptySegment(source: SegmentSource): Segment {
   if (source === 'literal') return { source, text: '' }
   if (source === 'dirname') return { source, level: 1 }
-  if (source === 'filename') return { source, transforms: ['strip_scene_tags', 'clean_special_chars'] }
+  if (source === 'filename') return { source, transforms: ['clean_special_chars'], strip_filter_ids: [] }
   return { source }
 }
 
 function emptyRule(): Rule {
   return { id: 0, name: '', separator: ' - ', segments: [emptySegment('dirname')] }
+}
+
+function emptyFilter(): StripFilter {
+  return { id: 0, name: '', type: 'strings', entries: [] }
+}
+
+function emptyReplaceEntry(): ReplaceEntry {
+  return { from: '', to: '' }
 }
 
 function segmentPreview(seg: Segment, t: (k: string) => string): string {
@@ -59,6 +80,128 @@ function segmentPreview(seg: Segment, t: (k: string) => string): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Strip filter form
+// ---------------------------------------------------------------------------
+
+function StripFilterForm({
+  filter,
+  onSave,
+  onCancel,
+}: {
+  filter: StripFilter
+  onSave: (f: StripFilter) => void
+  onCancel: () => void
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState<StripFilter>(filter)
+
+  const stringEntries = draft.type === 'strings' ? (draft.entries as string[]) : []
+  const replaceEntries = draft.type === 'replace_chars' ? (draft.entries as ReplaceEntry[]) : []
+
+  const switchType = (newType: StripFilter['type']) => {
+    setDraft({ ...draft, type: newType, entries: newType === 'replace_chars' ? [] : [] })
+  }
+
+  const updateReplaceEntry = (i: number, patch: Partial<ReplaceEntry>) => {
+    const updated = replaceEntries.map((e, idx) => (idx === i ? { ...e, ...patch } : e))
+    setDraft({ ...draft, entries: updated })
+  }
+
+  const removeReplaceEntry = (i: number) => {
+    setDraft({ ...draft, entries: replaceEntries.filter((_, idx) => idx !== i) })
+  }
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_name')}</span>
+          <Input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            className="w-56"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_type')}</span>
+          <select
+            value={draft.type}
+            onChange={(e) => switchType(e.target.value as StripFilter['type'])}
+            className="h-9 rounded-xl border border-line bg-surface-3 px-3 text-sm text-ink-1 outline-none"
+          >
+            <option value="strings">{t('ren_strip_filter_type_strings')}</option>
+            <option value="replace_chars">{t('ren_strip_filter_type_replace_chars')}</option>
+          </select>
+        </label>
+      </div>
+
+      {draft.type === 'strings' && (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
+          <textarea
+            value={stringEntries.join('\n')}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                entries: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean),
+              })
+            }
+            rows={6}
+            className="w-full resize-y rounded-xl border border-line bg-surface-3 px-3 py-2 font-mono text-xs text-ink-1 outline-none"
+          />
+        </label>
+      )}
+
+      {draft.type === 'replace_chars' && (
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
+          {replaceEntries.map((entry, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                value={entry.from}
+                onChange={(e) => updateReplaceEntry(i, { from: e.target.value })}
+                placeholder={t('ren_strip_filter_replace_from')}
+                className="h-8 w-24 font-mono text-xs"
+              />
+              <span className="text-xs text-ink-3">→</span>
+              <Input
+                value={entry.to}
+                onChange={(e) => updateReplaceEntry(i, { to: e.target.value })}
+                placeholder={t('ren_strip_filter_replace_to')}
+                className="h-8 w-24 font-mono text-xs"
+              />
+              <Button size="sm" variant="ghost" onClick={() => removeReplaceEntry(i)}>
+                {t('ren_segment_remove')}
+              </Button>
+            </div>
+          ))}
+          <Button
+            size="sm"
+            variant="subtle"
+            onClick={() => setDraft({ ...draft, entries: [...replaceEntries, emptyReplaceEntry()] })}
+          >
+            {t('ren_strip_filter_add_pair')}
+          </Button>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>
+          {t('save')}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          {t('ren_rule_cancel')}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Segment editor
+// ---------------------------------------------------------------------------
+
 function SegmentEditor({
   segment,
   onChange,
@@ -66,6 +209,7 @@ function SegmentEditor({
   onMove,
   canMoveUp,
   canMoveDown,
+  stripFilters,
 }: {
   segment: Segment
   onChange: (s: Segment) => void
@@ -73,6 +217,7 @@ function SegmentEditor({
   onMove: (dir: -1 | 1) => void
   canMoveUp: boolean
   canMoveDown: boolean
+  stripFilters: StripFilter[]
 }) {
   const { t } = useI18n()
   return (
@@ -112,19 +257,7 @@ function SegmentEditor({
       )}
 
       {segment.source === 'filename' && (
-        <div className="flex items-center gap-3 text-xs text-ink-3">
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={(segment.transforms ?? []).includes('strip_scene_tags')}
-              onChange={(e) => {
-                const set = new Set(segment.transforms ?? [])
-                e.target.checked ? set.add('strip_scene_tags') : set.delete('strip_scene_tags')
-                onChange({ ...segment, transforms: [...set] })
-              }}
-            />
-            {t('ren_segment_strip_scene_tags')}
-          </label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
           <label className="flex items-center gap-1.5">
             <input
               type="checkbox"
@@ -137,6 +270,23 @@ function SegmentEditor({
             />
             {t('ren_segment_clean_special_chars')}
           </label>
+          {stripFilters.length > 0 && (
+            <span className="border-l border-line pl-4 font-medium text-ink-2">{t('ren_segment_strip_filters_label')}:</span>
+          )}
+          {stripFilters.map((f) => (
+            <label key={f.id} className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={(segment.strip_filter_ids ?? []).includes(f.id)}
+                onChange={(e) => {
+                  const set = new Set(segment.strip_filter_ids ?? [])
+                  e.target.checked ? set.add(f.id) : set.delete(f.id)
+                  onChange({ ...segment, strip_filter_ids: [...set] })
+                }}
+              />
+              {f.name}
+            </label>
+          ))}
         </div>
       )}
 
@@ -165,7 +315,21 @@ function SegmentEditor({
   )
 }
 
-function RuleForm({ rule, onSave, onCancel }: { rule: Rule; onSave: (r: Rule) => void; onCancel: () => void }) {
+// ---------------------------------------------------------------------------
+// Rule form
+// ---------------------------------------------------------------------------
+
+function RuleForm({
+  rule,
+  onSave,
+  onCancel,
+  stripFilters,
+}: {
+  rule: Rule
+  onSave: (r: Rule) => void
+  onCancel: () => void
+  stripFilters: StripFilter[]
+}) {
   const { t } = useI18n()
   const [draft, setDraft] = useState<Rule>(rule)
 
@@ -209,6 +373,7 @@ function RuleForm({ rule, onSave, onCancel }: { rule: Rule; onSave: (r: Rule) =>
             onMove={(dir) => moveSegment(i, dir)}
             canMoveUp={i > 0}
             canMoveDown={i < draft.segments.length - 1}
+            stripFilters={stripFilters}
           />
         ))}
       </div>
@@ -232,18 +397,49 @@ function RuleForm({ rule, onSave, onCancel }: { rule: Rule; onSave: (r: Rule) =>
   )
 }
 
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 export default function RenameRulesEditor() {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const [editing, setEditing] = useState<Rule | null>(null)
+  const [editingRule, setEditingRule] = useState<Rule | null>(null)
+  const [editingFilter, setEditingFilter] = useState<StripFilter | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [newAssignmentDir, setNewAssignmentDir] = useState<string | null>(null)
   const [newAssignmentRule, setNewAssignmentRule] = useState<number | null>(null)
 
+  const stripFiltersQuery = useQuery<StripFilter[]>({
+    queryKey: ['strip-filters'],
+    queryFn: () => api('/api/rename/strip-filters'),
+  })
   const rules = useQuery<Rule[]>({ queryKey: ['rename-rules'], queryFn: () => api('/api/rename/rules') })
   const assignments = useQuery<Assignment[]>({
     queryKey: ['rename-assignments'],
     queryFn: () => api('/api/rename/assignments'),
+  })
+
+  const saveFilter = useMutation({
+    mutationFn: (f: StripFilter) =>
+      f.id
+        ? api(`/api/rename/strip-filters/${f.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ name: f.name, type: f.type, entries: f.entries }),
+          })
+        : api('/api/rename/strip-filters', {
+            method: 'POST',
+            body: JSON.stringify({ name: f.name, type: f.type, entries: f.entries }),
+          }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['strip-filters'] })
+      setEditingFilter(null)
+    },
+  })
+
+  const deleteFilter = useMutation({
+    mutationFn: (id: number) => api(`/api/rename/strip-filters/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strip-filters'] }),
   })
 
   const saveRule = useMutation({
@@ -259,7 +455,7 @@ export default function RenameRulesEditor() {
           }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['rename-rules'] })
-      setEditing(null)
+      setEditingRule(null)
     },
   })
 
@@ -286,16 +482,87 @@ export default function RenameRulesEditor() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['rename-assignments'] }),
   })
 
+  const stripFilters = stripFiltersQuery.data ?? []
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* ------------------------------------------------------------------ */}
+      {/* Strip filters                                                        */}
+      {/* ------------------------------------------------------------------ */}
+      <div>
+        <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_strip_filters_title')}</h2>
+        <p className="mb-3 text-sm text-ink-3">{t('ren_strip_filters_subtitle')}</p>
+
+        <div className="space-y-3">
+          {stripFilters.map((f) =>
+            editingFilter?.id === f.id ? (
+              <StripFilterForm
+                key={f.id}
+                filter={editingFilter}
+                onSave={(d) => saveFilter.mutate(d)}
+                onCancel={() => setEditingFilter(null)}
+              />
+            ) : (
+              <Card key={f.id} className="flex flex-wrap items-center gap-3 p-3.5">
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-ink-1">{f.name}</div>
+                  <div className="mt-0.5 text-xs text-ink-3">
+                    {t(`ren_strip_filter_type_${f.type}`)} &middot; {f.entries.length}{' '}
+                    {f.entries.length === 1 ? 'entry' : 'entries'}
+                  </div>
+                </div>
+                <Button size="sm" variant="subtle" onClick={() => setEditingFilter(f)}>
+                  {t('ren_strip_filter_edit')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (window.confirm(t('ren_strip_filter_delete_confirm'))) deleteFilter.mutate(f.id)
+                  }}
+                >
+                  {t('ren_strip_filter_delete')}
+                </Button>
+              </Card>
+            ),
+          )}
+          {stripFilters.length === 0 && !editingFilter && (
+            <p className="text-sm text-ink-3">{t('ren_strip_filter_none')}</p>
+          )}
+        </div>
+
+        {editingFilter?.id === 0 ? (
+          <div className="mt-3">
+            <StripFilterForm
+              filter={editingFilter}
+              onSave={(d) => saveFilter.mutate(d)}
+              onCancel={() => setEditingFilter(null)}
+            />
+          </div>
+        ) : (
+          <Button size="sm" variant="subtle" className="mt-3" onClick={() => setEditingFilter(emptyFilter())}>
+            {t('ren_strip_filter_new')}
+          </Button>
+        )}
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Rename rules                                                         */}
+      {/* ------------------------------------------------------------------ */}
       <div>
         <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_rules_title')}</h2>
         <p className="mb-3 text-sm text-ink-3">{t('ren_rules_subtitle')}</p>
 
         <div className="space-y-3">
           {(rules.data ?? []).map((r) =>
-            editing?.id === r.id ? (
-              <RuleForm key={r.id} rule={editing} onSave={(d) => saveRule.mutate(d)} onCancel={() => setEditing(null)} />
+            editingRule?.id === r.id ? (
+              <RuleForm
+                key={r.id}
+                rule={editingRule}
+                onSave={(d) => saveRule.mutate(d)}
+                onCancel={() => setEditingRule(null)}
+                stripFilters={stripFilters}
+              />
             ) : (
               <Card key={r.id} className="flex flex-wrap items-center gap-3 p-3.5">
                 <div className="min-w-0 flex-1">
@@ -304,7 +571,7 @@ export default function RenameRulesEditor() {
                     {r.segments.map((s) => segmentPreview(s, t)).join(` "${r.separator}" `)}
                   </div>
                 </div>
-                <Button size="sm" variant="subtle" onClick={() => setEditing(r)}>
+                <Button size="sm" variant="subtle" onClick={() => setEditingRule(r)}>
                   {t('ren_rule_edit')}
                 </Button>
                 <Button
@@ -322,17 +589,25 @@ export default function RenameRulesEditor() {
           {rules.data?.length === 0 && <p className="text-sm text-ink-3">{t('ren_rules_none')}</p>}
         </div>
 
-        {editing?.id === 0 ? (
+        {editingRule?.id === 0 ? (
           <div className="mt-3">
-            <RuleForm rule={editing} onSave={(d) => saveRule.mutate(d)} onCancel={() => setEditing(null)} />
+            <RuleForm
+              rule={editingRule}
+              onSave={(d) => saveRule.mutate(d)}
+              onCancel={() => setEditingRule(null)}
+              stripFilters={stripFilters}
+            />
           </div>
         ) : (
-          <Button size="sm" variant="subtle" className="mt-3" onClick={() => setEditing(emptyRule())}>
+          <Button size="sm" variant="subtle" className="mt-3" onClick={() => setEditingRule(emptyRule())}>
             {t('ren_rule_new')}
           </Button>
         )}
       </div>
 
+      {/* ------------------------------------------------------------------ */}
+      {/* Directory assignments                                                */}
+      {/* ------------------------------------------------------------------ */}
       <div>
         <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_assignments_title')}</h2>
         <p className="mb-3 text-sm text-ink-3">{t('ren_assignments_subtitle')}</p>

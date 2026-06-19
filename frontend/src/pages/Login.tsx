@@ -14,6 +14,7 @@ export default function Login({
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [installRenameDefaults, setInstallRenameDefaults] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -27,7 +28,10 @@ export default function Login({
     setError('')
     try {
       const endpoint = needsSetup ? '/api/auth/initial-setup' : '/api/login'
-      await api(endpoint, { method: 'POST', body: JSON.stringify({ username, password }) })
+      const body = needsSetup
+        ? { username, password, install_rename_defaults: installRenameDefaults }
+        : { username, password }
+      await api(endpoint, { method: 'POST', body: JSON.stringify(body) })
       onSuccess()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'error')
@@ -86,6 +90,15 @@ export default function Login({
               autoComplete="new-password"
               className="mb-4 w-full"
             />
+            <label className="mb-6 flex items-start gap-2.5 text-xs text-ink-2">
+              <input
+                type="checkbox"
+                checked={installRenameDefaults}
+                onChange={(e) => setInstallRenameDefaults(e.target.checked)}
+                className="mt-0.5 shrink-0"
+              />
+              {t('setup_install_rename_defaults')}
+            </label>
           </>
         )}
 

@@ -9,8 +9,9 @@ conditional logic, deliberately simple:
                                                       {"level": int}
     resolution  -- "WIDTHxHEIGHT" (video/image) or the audio marker
     duration    -- formatted duration (video/audio)
-    filename    -- the original file stem, with optional transforms
-                                                      {"transforms": [str, ...]}
+    filename    -- the original file stem, with optional transforms and
+                   user-defined strip filters
+                   {"transforms": [str, ...], "strip_filter_ids": [int, ...]}
 
 Resolution/duration are read from the already-enriched ``files`` row instead
 of shelling out to ffprobe/exiftool per file, and the segment model replaces a
@@ -22,22 +23,6 @@ import re
 # Fixed marker used in place of a resolution for audio files (no width/height).
 AUDIO_LABEL = "audio"
 
-# Scene-release tags stripped by the "strip_scene_tags" transform.
-_SCENE_TAGS = re.compile(
-    r"\b(?:"
-    r"(?:2160|1080|720|480|360)p"
-    r"|4K|UHD"
-    r"|WEB(?:Rip|DL|[-_]DL)?"
-    r"|BluRay|BDRip|BRRip|DVDRip"
-    r"|[Hh]\.?26[45]|[Xx]\.?26[45]"
-    r"|HEVC|AVC|AV1"
-    r"|AAC|MP3|AC3|DD5?\.1"
-    r"|MP4|MKV|AVI|WMV"
-    r")\b",
-    re.IGNORECASE,
-)
-_RELEASE_GROUP = re.compile(r"-[A-Z0-9]{2,10}$", re.IGNORECASE)
-
 
 def _clean_special_chars(raw: str) -> str:
     """Replace non-printable/non-Latin characters with "_" and collapse runs."""
@@ -45,15 +30,24 @@ def _clean_special_chars(raw: str) -> str:
     return re.sub(r"_+", "_", cleaned).strip("_")
 
 
-def _strip_scene_tags(stem: str) -> str:
-    """Dots/underscores -> spaces, scene/codec tags and release-group removed."""
-    stem = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", stem)  # keep dots between digits (dates)
-    stem = stem.replace("_", " ")
-    stem = _SCENE_TAGS.sub("", stem)
-    stem = _RELEASE_GROUP.sub("", stem)
-    stem = re.sub(r" {2,}", " ", stem)
-    stem = re.sub(r"(?: -)+$", "", stem)
-    return stem.strip(" -.")
+def _apply_strip_filter(stem: str, f: dict) -> str:
+    """Apply a single user-defined strip filter to ``stem``.
+
+    Type 'strings':      each entry (str) is removed as a whole word, case-insensitive.
+    Type 'replace_chars': each entry ({"from": str, "to": str}) replaces occurrences of
+                          ``from`` with ``to``.
+    """
+    entries = f.get("entries") or []
+    if f.get("type") == "strings":
+        for term in entries:
+            if term:
+                stem = re.sub(r"\b" + re.escape(term) + r"\b", "", stem, flags=re.I)
+    elif f.get("type") == "replace_chars":
+        for entry in entries:
+            src, dst = entry.get("from", ""), entry.get("to", "")
+            if src:
+                stem = stem.replace(src, dst)
+    return re.sub(r" {2,}", " ", stem).strip()
 
 
 def _format_duration(seconds: float) -> str:
@@ -103,17 +97,19 @@ def _render_duration(file_row: dict) -> tuple[str, bool]:
     return "", True  # not enriched yet
 
 
-def _render_filename(raw: str, seg: dict) -> str:
-    transforms = seg.get("transforms") or []
+def _render_filename(raw: str, seg: dict, filters_by_id: dict) -> str:
     value = raw
-    if "clean_special_chars" in transforms:
+    for fid in seg.get("strip_filter_ids") or []:
+        f = filters_by_id.get(int(fid))
+        if f:
+            value = _apply_strip_filter(value, f)
+    if "clean_special_chars" in (seg.get("transforms") or []):
         value = _clean_special_chars(value)
-    if "strip_scene_tags" in transforms:
-        value = _strip_scene_tags(value)
-    return value
+    value = re.sub(r" {2,}", " ", value)
+    return value.strip(" -.")
 
 
-def build_target_name(rule: dict, assignment_dir: str, file_row: dict) -> str | None:
+def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_by_id: dict) -> str | None:
     """Compute the target filename (with extension) for ``file_row``.
 
     Returns ``None`` when a required value (resolution/duration) hasn't been
@@ -148,7 +144,7 @@ def build_target_name(rule: dict, assignment_dir: str, file_row: dict) -> str | 
             prefix_val = _join(rendered, separator)
             prefix = prefix_val + separator if prefix_val else ""
             raw = stem[len(prefix):] if prefix and stem.startswith(prefix) else stem
-            value, seg_missing = _render_filename(raw, seg), False
+            value, seg_missing = _render_filename(raw, seg, filters_by_id), False
         else:
             value, seg_missing = "", False
         missing = missing or seg_missing

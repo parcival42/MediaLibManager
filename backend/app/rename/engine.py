@@ -17,30 +17,60 @@ from . import rules
 
 # A starter rule (directory name + resolution + cleaned-up original filename),
 # so a fresh install doesn't start with an empty rule editor.
-DEFAULT_RULE_NAME = "Name - Resolution - Filename"
-DEFAULT_RULE_SEGMENTS = [
-    {"source": "dirname", "level": 1},
-    {"source": "resolution"},
-    {"source": "filename", "transforms": ["strip_scene_tags", "clean_special_chars"]},
+_PREDEFINED_FILTERS = [
+    {
+        "name": "Separators",
+        "type": "replace_chars",
+        "entries": [{"from": ".", "to": " "}, {"from": "_", "to": " "}],
+    },
+    {
+        "name": "Scene Tags",
+        "type": "strings",
+        "entries": [
+            "2160p", "1080p", "720p", "480p", "360p",
+            "4K", "UHD",
+            "H.264", "H.265", "x264", "x265",
+            "HEVC", "AVC", "AV1",
+            "AAC", "MP3", "AC3", "DD5.1",
+            "MP4", "MKV", "AVI", "WMV",
+        ],
+    },
 ]
-_SEED_FLAG_KEY = "seeded_default_rename_rule"
 
 
-def ensure_default_rule() -> None:
-    """Insert the default rule once, ever. Tracked via a settings flag rather
-    than "table is empty" so deleting it later doesn't bring it back."""
-    con = db.connect()
-    try:
-        if con.execute("SELECT 1 FROM settings WHERE key = ?", (_SEED_FLAG_KEY,)).fetchone():
-            return
-        con.execute(
-            "INSERT INTO rename_rules(name, segments, separator, created_at) VALUES(?, ?, ?, ?)",
-            (DEFAULT_RULE_NAME, json.dumps(DEFAULT_RULE_SEGMENTS), " - ", time.time()),
+def seed_rename_defaults(con) -> None:
+    """Seed predefined strip filters and the default rename rule.
+
+    Called once during initial setup when the user opts in. Inserts filters
+    first so their IDs can be referenced in the rule's segment JSON.
+    """
+    filter_ids = []
+    for f in _PREDEFINED_FILTERS:
+        cur = con.execute(
+            "INSERT INTO strip_filters(name, type, entries) VALUES(?, ?, ?)",
+            (f["name"], f["type"], json.dumps(f["entries"])),
         )
-        con.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (_SEED_FLAG_KEY, json.dumps(True)))
-        con.commit()
-    finally:
-        con.close()
+        filter_ids.append(cur.lastrowid)
+
+    segments = [
+        {"source": "dirname", "level": 1},
+        {"source": "resolution"},
+        {
+            "source": "filename",
+            "transforms": ["clean_special_chars"],
+            "strip_filter_ids": filter_ids,
+        },
+    ]
+    con.execute(
+        "INSERT INTO rename_rules(name, segments, separator, created_at) VALUES(?, ?, ?, ?)",
+        ("Name - Resolution - Filename", json.dumps(segments), " - ", time.time()),
+    )
+
+
+def _load_strip_filters(con) -> dict:
+    """Return all strip filters as {id: {type, entries}} for O(1) lookup."""
+    rows = con.execute("SELECT id, type, entries FROM strip_filters").fetchall()
+    return {r["id"]: {"type": r["type"], "entries": json.loads(r["entries"])} for r in rows}
 
 
 def _load_assignments(con) -> list[dict]:
@@ -114,6 +144,7 @@ def preview(directory: str | None = None) -> dict:
         ).fetchall()]
 
         assignments = _load_assignments(con)
+        filters_by_id = _load_strip_filters(con)
     finally:
         con.close()
 
@@ -127,7 +158,7 @@ def preview(directory: str | None = None) -> dict:
         match = _best_assignment(assignments, f["path"])
         if not match:
             continue
-        target = rules.build_target_name(match, match["assign_dir"], f)
+        target = rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
         current_name = os.path.basename(f["path"])
         if target is None:
             pending.append({
@@ -196,6 +227,7 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
     con = db.connect()
     try:
         assignments = _load_assignments(con)
+        filters_by_id = _load_strip_filters(con)
         placeholders = ",".join("?" * len(file_ids))
         rows = con.execute(
             f"SELECT {_FILE_COLUMNS}, present FROM files WHERE id IN ({placeholders})",
@@ -218,7 +250,7 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
             if not match:
                 skipped += 1
                 continue
-            target = rules.build_target_name(match, match["assign_dir"], f)
+            target = rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
             current_name = os.path.basename(f["path"])
             if target is None or target == current_name:
                 skipped += 1

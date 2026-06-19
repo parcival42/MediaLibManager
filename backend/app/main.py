@@ -25,7 +25,6 @@ from .api import settings as settings_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
 from .enrich import worker as enrich_worker
-from .rename import engine as rename_engine
 from .tasks import runner as task_runner
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -34,7 +33,6 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    rename_engine.ensure_default_rule()
     # A running/queued task can only be stale after a restart (no resume model).
     con = db.connect()
     con.execute(
