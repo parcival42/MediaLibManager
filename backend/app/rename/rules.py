@@ -26,7 +26,7 @@ AUDIO_LABEL = "audio"
 
 def _clean_special_chars(raw: str) -> str:
     """Replace non-printable/non-Latin characters with "_" and collapse runs."""
-    cleaned = re.sub(r"[^\x20-\x7EÀ-ɏ]+", "_", raw)
+    cleaned = re.sub(r"[^\x20-\x7EÀ-ɏ‘-”–—]+", "_", raw)
     return re.sub(r"_+", "_", cleaned).strip("_")
 
 

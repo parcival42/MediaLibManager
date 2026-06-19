@@ -53,7 +53,7 @@ const SOURCES: SegmentSource[] = ['dirname', 'resolution', 'duration', 'filename
 function emptySegment(source: SegmentSource): Segment {
   if (source === 'literal') return { source, text: '' }
   if (source === 'dirname') return { source, level: 1 }
-  if (source === 'filename') return { source, transforms: ['clean_special_chars'], strip_filter_ids: [] }
+  if (source === 'filename') return { source, transforms: [], strip_filter_ids: [] }
   return { source }
 }
 
@@ -141,12 +141,7 @@ function StripFilterForm({
           <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
           <textarea
             value={stringEntries.join('\n')}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                entries: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean),
-              })
-            }
+            onChange={(e) => setDraft({ ...draft, entries: e.target.value.split('\n') })}
             rows={6}
             className="w-full resize-y rounded-xl border border-line bg-surface-3 px-3 py-2 font-mono text-xs text-ink-1 outline-none"
           />
@@ -187,7 +182,17 @@ function StripFilterForm({
       )}
 
       <div className="flex items-center gap-2 pt-1">
-        <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>
+        <Button
+          size="sm"
+          onClick={() => {
+            const cleaned =
+              draft.type === 'strings'
+                ? { ...draft, entries: (draft.entries as string[]).map((s) => s.trim()).filter(Boolean) }
+                : draft
+            onSave(cleaned)
+          }}
+          disabled={!draft.name.trim()}
+        >
           {t('save')}
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
