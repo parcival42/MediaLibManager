@@ -31,6 +31,7 @@ interface Member {
 interface Group {
   id: number
   kind: string
+  ignored: boolean
   members: Member[]
   reclaimable: number
 }
@@ -184,16 +185,10 @@ export default function Duplicates() {
     deleteMut.mutate([...selected])
   }
 
-  // Groups ignored this session — kept in local state so they survive kind-filter
-  // switches. An ignored group stays visible (the server hasn't rebuilt yet) but
-  // is dimmed; on the next rebuild it is gone. The ignore is persisted server-side
-  // immediately and can be toggled back off (un-ignore) until then.
-  const [ignoredGroupIds, setIgnoredGroupIds] = useState<Set<number>>(new Set())
   // Group-level multi-select for the bulk "ignore selected" action (separate
   // from the per-file `selected` set used for deletion).
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set())
   useEffect(() => {
-    setIgnoredGroupIds(new Set())
     setSelectedGroups(new Set())
   }, [list.data])
 
@@ -203,9 +198,7 @@ export default function Duplicates() {
         method: 'POST',
         body: JSON.stringify({ file_ids: fileIds }),
       }),
-    onSuccess: (_data, variables) => {
-      setIgnoredGroupIds((prev) => new Set([...prev, variables.groupId]))
-    },
+    onSuccess: () => { list.refetch() },
   })
 
   const unignoreMut = useMutation({
@@ -214,19 +207,12 @@ export default function Duplicates() {
         method: 'POST',
         body: JSON.stringify({ file_ids: fileIds }),
       }),
-    onSuccess: (_data, variables) => {
-      setIgnoredGroupIds((prev) => {
-        const next = new Set(prev)
-        next.delete(variables.groupId)
-        return next
-      })
-    },
+    onSuccess: () => { list.refetch() },
   })
 
-  // Toggle: ignore an active group, or undo the ignore if it is already ignored.
   const onToggleIgnore = (g: Group) => {
     const fileIds = g.members.map((m) => m.id)
-    if (ignoredGroupIds.has(g.id)) unignoreMut.mutate({ fileIds, groupId: g.id })
+    if (g.ignored) unignoreMut.mutate({ fileIds, groupId: g.id })
     else ignoreMut.mutate({ fileIds, groupId: g.id })
   }
 
@@ -240,7 +226,7 @@ export default function Duplicates() {
 
   const onIgnoreSelectedGroups = () => {
     for (const g of groups) {
-      if (selectedGroups.has(g.id) && !ignoredGroupIds.has(g.id)) {
+      if (selectedGroups.has(g.id) && !g.ignored) {
         ignoreMut.mutate({ fileIds: g.members.map((m) => m.id), groupId: g.id })
       }
     }
@@ -375,7 +361,7 @@ export default function Duplicates() {
       ) : (
         <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
           {groups.map((g) => {
-            const isIgnored = ignoredGroupIds.has(g.id)
+            const isIgnored = g.ignored
             return (
             <div key={g.id} className={`rounded-2xl border border-line bg-surface-2 p-4 transition ${isIgnored ? 'opacity-40' : ''}`}>
               <div className="mb-3 flex items-center gap-3 text-xs">

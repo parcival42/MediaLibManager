@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS dedup_ignores (
 CREATE TABLE IF NOT EXISTS duplicate_groups (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     kind       TEXT NOT NULL,                     -- exact_image / exact_video / exact_other / visual / video / deep
-    created_at REAL
+    created_at REAL,
+    ignored    INTEGER NOT NULL DEFAULT 0         -- 1 = user dismissed; persists across rebuilds via dedup_ignores
 );
 CREATE TABLE IF NOT EXISTS duplicate_members (
     group_id INTEGER NOT NULL REFERENCES duplicate_groups(id) ON DELETE CASCADE,
@@ -155,12 +156,16 @@ def connect() -> sqlite3.Connection:
     return con
 
 
-# Columns added to `files` after the initial schema shipped. Applied on startup
-# so existing databases pick them up without a manual migration.
+# Columns added after the initial schema shipped. Applied on startup so existing
+# databases pick them up without a manual migration.
 _ADDED_FILE_COLUMNS = {
     "frames_b64":      "TEXT",
     "edge_hashes":     "TEXT",
     "mean_saturation": "REAL",
+}
+
+_ADDED_DUP_GROUP_COLUMNS = {
+    "ignored": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -169,6 +174,11 @@ def _migrate(con: sqlite3.Connection) -> None:
     for name, decl in _ADDED_FILE_COLUMNS.items():
         if name not in existing:
             con.execute(f"ALTER TABLE files ADD COLUMN {name} {decl}")
+
+    existing_grp = {row["name"] for row in con.execute("PRAGMA table_info(duplicate_groups)")}
+    for name, decl in _ADDED_DUP_GROUP_COLUMNS.items():
+        if name not in existing_grp:
+            con.execute(f"ALTER TABLE duplicate_groups ADD COLUMN {name} {decl}")
 
 
 def init_db() -> None:

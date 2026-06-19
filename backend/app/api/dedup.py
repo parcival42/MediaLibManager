@@ -96,7 +96,7 @@ def _enrich_group(g: dict, members: list[dict], frame_threshold: int) -> dict:
     sizes = [m["size"] or 0 for m in ordered]
     keep_size = reference["size"] or 0 if reference else 0
     reclaimable = sum(sizes) - keep_size
-    return {"id": g["id"], "kind": kind, "members": out_members, "reclaimable": reclaimable}
+    return {"id": g["id"], "kind": kind, "ignored": bool(g["ignored"]), "members": out_members, "reclaimable": reclaimable}
 
 
 @router.get("/duplicates")
@@ -111,7 +111,7 @@ def list_duplicates(_: str = Depends(auth.current_user), kind: str | None = None
 
     con = db.connect()
     groups = con.execute(
-        f"SELECT id, kind, created_at FROM duplicate_groups{where} "
+        f"SELECT id, kind, created_at, ignored FROM duplicate_groups{where} "
         f"ORDER BY CASE kind {_KIND_RANK_SQL} ELSE {len(KIND_ORDER)} END, id",
         params,
     ).fetchall()
@@ -163,10 +163,16 @@ def ignore_group(req: IgnoreRequest, _: str = Depends(auth.current_user)):
         for i in range(len(ids))
         for j in range(i + 1, len(ids))
     ]
+    placeholders = ','.join('?' * len(ids))
     con = db.connect()
     con.executemany(
         "INSERT OR IGNORE INTO dedup_ignores(file_id_a, file_id_b, ignored_at) VALUES(?, ?, ?)",
         pairs,
+    )
+    con.execute(
+        f"UPDATE duplicate_groups SET ignored=1 WHERE id IN "
+        f"(SELECT DISTINCT group_id FROM duplicate_members WHERE file_id IN ({placeholders}))",
+        ids,
     )
     con.commit()
     con.close()
@@ -185,9 +191,15 @@ def unignore_group(req: IgnoreRequest, _: str = Depends(auth.current_user)):
         for i in range(len(ids))
         for j in range(i + 1, len(ids))
     ]
+    placeholders = ','.join('?' * len(ids))
     con = db.connect()
     con.executemany(
         "DELETE FROM dedup_ignores WHERE file_id_a = ? AND file_id_b = ?", pairs
+    )
+    con.execute(
+        f"UPDATE duplicate_groups SET ignored=0 WHERE id IN "
+        f"(SELECT DISTINCT group_id FROM duplicate_members WHERE file_id IN ({placeholders}))",
+        ids,
     )
     con.commit()
     con.close()
@@ -211,10 +223,11 @@ def ignore_stats(_: str = Depends(auth.current_user)):
 
 @router.post("/duplicates/ignores/reset")
 def reset_ignores(_: str = Depends(auth.current_user)):
-    """Clear the whole ignore list. Previously ignored groups reappear on the
-    next rebuild ('Find duplicates')."""
+    """Clear the whole ignore list. Previously ignored groups become active again
+    immediately; they will also be detected on the next rebuild."""
     con = db.connect()
     cur = con.execute("DELETE FROM dedup_ignores")
+    con.execute("UPDATE duplicate_groups SET ignored=0")
     con.commit()
     con.close()
     return {"cleared": cur.rowcount}
