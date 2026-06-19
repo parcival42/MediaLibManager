@@ -303,7 +303,7 @@ export default function Rename() {
                               className="w-full rounded border border-line bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1"
                             />
                           ) : (
-                            <div className="break-all font-medium text-ink-1">
+                            <div className="break-all text-ink-1">
                               {entry.item.new_name}
                             </div>
                           )}
