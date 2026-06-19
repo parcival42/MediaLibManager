@@ -200,6 +200,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   },
   ren_refresh: { de: 'Vorschau aktualisieren', en: 'Refresh preview' },
   ren_none: { de: 'Keine Umbenennungen nötig.', en: 'No renames needed.' },
+  ren_load_error: { de: 'Vorschau konnte nicht geladen werden.', en: 'Could not load preview.' },
   ren_proposed_count: { de: 'Vorschläge', en: 'proposed' },
   ren_collisions: { de: 'Kollisionen', en: 'collisions' },
   ren_pending_count: { de: 'wartet auf Anreicherung', en: 'pending enrichment' },

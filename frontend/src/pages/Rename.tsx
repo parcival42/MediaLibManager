@@ -226,7 +226,11 @@ export default function Rename() {
         )}
       </div>
 
-      {renames.length === 0 && !list.isLoading ? (
+      {list.isLoading ? (
+        <div className="grid h-32 place-items-center text-ink-3">…</div>
+      ) : list.isError ? (
+        <EmptyState text={t('ren_load_error')} />
+      ) : renames.length === 0 ? (
         <EmptyState text={t('ren_none')} />
       ) : (
         <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
