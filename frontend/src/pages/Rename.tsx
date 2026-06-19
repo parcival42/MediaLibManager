@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
 import { Button, EmptyState, PageHeader } from '../components/ui'
@@ -33,6 +34,8 @@ interface Task {
   status: string
   progress: number
 }
+
+type FlatEntry = { kind: 'dir'; dir: string } | { kind: 'item'; item: RenameItem }
 
 /** Poll a task until it reaches a terminal state, then fire `onDone` once. */
 function useTaskPolling(taskId: string | null, onDone: () => void) {
@@ -77,8 +80,6 @@ export default function Rename() {
   const renames = list.data?.renames ?? []
   const pending = list.data?.pending ?? []
 
-  // Selection starts empty on every (re)load — applying a rename is an
-  // explicit, deliberate action, never pre-selected.
   useEffect(() => {
     setSelected(new Set())
   }, [list.data])
@@ -92,6 +93,15 @@ export default function Rename() {
     }
     return [...byDir.entries()].sort(([a], [b]) => a.localeCompare(b))
   }, [renames])
+
+  const flatList = useMemo<FlatEntry[]>(() => {
+    const entries: FlatEntry[] = []
+    for (const [dir, items] of grouped) {
+      entries.push({ kind: 'dir', dir })
+      for (const item of items) entries.push({ kind: 'item', item })
+    }
+    return entries
+  }, [grouped])
 
   const toggle = (id: number) =>
     setSelected((prev) => {
@@ -126,9 +136,6 @@ export default function Rename() {
     applyMut.mutate([...selected])
   }
 
-  // Manual, rule-independent rename of a single row — mainly for resolving a
-  // collision the rule itself can't avoid (e.g. two distinct files mapping to
-  // the same target name) without waiting for the next rule run.
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editValue, setEditValue] = useState('')
   const manualRenameMut = useMutation({
@@ -148,6 +155,14 @@ export default function Rename() {
     if (!name) return
     manualRenameMut.mutate({ id, new_name: name })
   }
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: flatList.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (flatList[i].kind === 'dir' ? 36 : 68),
+    overscan: 8,
+  })
 
   return (
     <div className="flex h-full flex-col">
@@ -233,105 +248,119 @@ export default function Rename() {
       ) : renames.length === 0 ? (
         <EmptyState text={t('ren_none')} />
       ) : (
-        <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
-          {grouped.map(([dir, items]) => (
-            <div key={dir} className="rounded-2xl border border-line bg-surface-2 p-4">
-              <div className="mb-3 truncate font-mono text-xs text-ink-3" title={dir}>
-                {dir}
-              </div>
-              <div className="space-y-1.5">
-                {items.map((r) => (
-                  <div key={r.file_id}>
-                    <label
-                      className={`flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-1.5 text-sm transition ${
-                        r.collision ? 'bg-warn/[0.08]' : 'hover:bg-white/5'
-                      }`}
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pr-1">
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((vi) => {
+              const entry = flatList[vi.index]
+              return (
+                <div
+                  key={vi.key}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
+                >
+                  {entry.kind === 'dir' && (
+                    <div
+                      className={`truncate px-1 font-mono text-xs text-ink-3 ${vi.index === 0 ? 'pb-1' : 'pb-1 pt-4'}`}
+                      title={entry.dir}
                     >
-                      <input
-                        type="checkbox"
-                        checked={selected.has(r.file_id)}
-                        onChange={() => toggle(r.file_id)}
-                        className="h-3.5 w-3.5 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-ink-2" title={r.current_name}>
-                        {r.current_name}
-                      </span>
-                      <span className="shrink-0 text-ink-3">→</span>
-                      {editingId === r.file_id ? (
+                      {entry.dir}
+                    </div>
+                  )}
+                  {entry.kind === 'item' && (
+                    <div>
+                      <label
+                        className={`flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 text-sm transition ${
+                          entry.item.collision ? 'bg-warn/[0.08]' : 'hover:bg-white/5'
+                        }`}
+                      >
                         <input
-                          autoFocus
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onClick={(e) => e.preventDefault()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              submitEdit(r.file_id)
-                            }
-                            if (e.key === 'Escape') {
-                              e.preventDefault()
-                              setEditingId(null)
-                            }
-                          }}
-                          className="min-w-0 flex-1 truncate rounded border border-line bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1"
+                          type="checkbox"
+                          checked={selected.has(entry.item.file_id)}
+                          onChange={() => toggle(entry.item.file_id)}
+                          className="mt-1 h-3.5 w-3.5 shrink-0"
                         />
-                      ) : (
-                        <span className="min-w-0 flex-1 truncate font-medium text-ink-1" title={r.new_name}>
-                          {r.new_name}
-                        </span>
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="break-all text-ink-2">
+                            {entry.item.current_name}
+                          </div>
+                          {editingId === entry.item.file_id ? (
+                            <input
+                              autoFocus
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onClick={(e) => e.preventDefault()}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  submitEdit(entry.item.file_id)
+                                }
+                                if (e.key === 'Escape') {
+                                  e.preventDefault()
+                                  setEditingId(null)
+                                }
+                              }}
+                              className="w-full rounded border border-line bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1"
+                            />
+                          ) : (
+                            <div className="break-all font-medium text-ink-1">
+                              {entry.item.new_name}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                          {entry.item.collision && (
+                            <span className="rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
+                              {t('ren_collision_badge')}
+                            </span>
+                          )}
+                          {editingId === entry.item.file_id ? (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  submitEdit(entry.item.file_id)
+                                }}
+                                disabled={manualRenameMut.isPending}
+                                className="text-xs text-accent hover:underline"
+                              >
+                                {t('rename_confirm')}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  setEditingId(null)
+                                }}
+                                className="text-xs text-ink-3 hover:text-ink-1"
+                              >
+                                {t('rename_cancel')}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault()
+                                startEdit(entry.item)
+                              }}
+                              title={t('rename_action')}
+                              className="text-ink-3 hover:text-ink-1"
+                            >
+                              ✎
+                            </button>
+                          )}
+                        </div>
+                      </label>
+                      {editingId === entry.item.file_id && manualRenameMut.isError && (
+                        <p className="px-2.5 pb-1 text-xs text-danger">
+                          {(manualRenameMut.error as Error)?.message}
+                        </p>
                       )}
-                      <span className="flex w-24 shrink-0 justify-end">
-                        {r.collision && (
-                          <span className="rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
-                            {t('ren_collision_badge')}
-                          </span>
-                        )}
-                      </span>
-                      {editingId === r.file_id ? (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault()
-                              submitEdit(r.file_id)
-                            }}
-                            disabled={manualRenameMut.isPending}
-                            className="shrink-0 text-xs text-accent hover:underline"
-                          >
-                            {t('rename_confirm')}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault()
-                              setEditingId(null)
-                            }}
-                            className="shrink-0 text-xs text-ink-3 hover:text-ink-1"
-                          >
-                            {t('rename_cancel')}
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault()
-                            startEdit(r)
-                          }}
-                          title={t('rename_action')}
-                          className="shrink-0 text-ink-3 hover:text-ink-1"
-                        >
-                          ✎
-                        </button>
-                      )}
-                    </label>
-                    {editingId === r.file_id && manualRenameMut.isError && (
-                      <p className="px-2.5 pb-1 text-xs text-danger">
-                        {(manualRenameMut.error as Error)?.message}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
