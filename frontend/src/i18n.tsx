@@ -203,6 +203,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     en: 'Rename files using the rules defined in Settings. Check the preview, then apply.',
   },
   ren_refresh: { de: 'Vorschau aktualisieren', en: 'Refresh preview' },
+  ren_previewing: { de: 'Vorschau wird geladen…', en: 'Loading preview…' },
   ren_none: { de: 'Keine Umbenennungen nötig.', en: 'No renames needed.' },
   ren_load_error: { de: 'Vorschau konnte nicht geladen werden.', en: 'Could not load preview.' },
   ren_proposed_count: { de: 'Vorschläge', en: 'proposed' },

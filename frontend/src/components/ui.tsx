@@ -102,6 +102,22 @@ export function Segmented<T extends string>({
   )
 }
 
+export function Spinner({ className = '' }: { className?: string }) {
+  return (
+    <div
+      className={`h-5 w-5 animate-spin rounded-full border-2 border-line border-t-accent ${className}`}
+    />
+  )
+}
+
+export function LoadingPane({ className = '' }: { className?: string }) {
+  return (
+    <div className={`grid place-items-center ${className}`}>
+      <Spinner />
+    </div>
+  )
+}
+
 export function EmptyState({ text }: { text: string }) {
   return (
     <div className="flex items-center justify-center py-16">

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { api } from './api/client'
 import Layout from './components/Layout'
+import { LoadingPane } from './components/ui'
 import Login from './pages/Login'
 import Overview from './pages/Overview'
 import Library from './pages/Library'
@@ -35,7 +36,7 @@ export default function App() {
   }, [refetch])
 
   if (isLoading) {
-    return <div className="grid h-full place-items-center text-ink-3">…</div>
+    return <LoadingPane className="h-full" />
   }
 
   if (!data?.authenticated) {

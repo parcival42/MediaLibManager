@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, PageHeader } from '../components/ui'
+import { Button, EmptyState, LoadingPane, PageHeader, Spinner } from '../components/ui'
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
 
@@ -171,7 +171,8 @@ export default function Rename() {
         subtitle={t('ren_subtitle')}
         actions={
           <Button onClick={() => list.refetch()} disabled={list.isFetching}>
-            {t('ren_refresh')}
+            {list.isFetching && <Spinner className="h-3.5 w-3.5" />}
+            {list.isFetching ? t('ren_previewing') : t('ren_refresh')}
           </Button>
         }
       />
@@ -242,7 +243,7 @@ export default function Rename() {
       </div>
 
       {list.isLoading ? (
-        <div className="grid h-32 place-items-center text-ink-3">…</div>
+        <LoadingPane className="h-32" />
       ) : list.isError ? (
         <EmptyState text={t('ren_load_error')} />
       ) : renames.length === 0 ? (

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
+import { LoadingPane } from '../components/ui'
 import { formatSize, TYPE_ICON } from '../utils'
 
 interface TypeBucket {
@@ -65,7 +66,7 @@ export default function Statistics() {
   })
 
   if (isLoading || !data) {
-    return <div className="grid h-full place-items-center text-ink-3">…</div>
+    return <LoadingPane className="h-full" />
   }
 
   const { library, dedup, metadata } = data
