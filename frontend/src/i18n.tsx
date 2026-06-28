@@ -182,6 +182,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   dup_select_group: { de: 'Gruppe auswählen', en: 'Select group' },
   dup_ignore_selected: { de: 'Ausgewählte ignorieren', en: 'Ignore selected' },
 
+  dup_sort_kind: { de: 'Typ', en: 'Kind' },
+  dup_sort_path: { de: 'Pfad', en: 'Path' },
+  dup_sort_size: { de: 'Größe', en: 'Size' },
+
   dup_scope_choose: { de: 'Verzeichnis wählen', en: 'Choose directory' },
   dup_scope_all: { de: 'Gesamte Bibliothek', en: 'Entire library' },
   dup_scope_label: { de: 'Bereich', en: 'Scope' },

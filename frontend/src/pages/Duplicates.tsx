@@ -71,9 +71,12 @@ function useTaskPolling(taskId: string | null, onDone: () => void) {
   return task
 }
 
+type SortKey = 'kind' | 'path' | 'size'
+
 export default function Duplicates() {
   const { t } = useI18n()
   const [kind, setKind] = useState('')
+  const [sort, setSort] = useState<SortKey>('kind')
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [preview, setPreview] = useState<Member | null>(null)
   const [frameSrc, setFrameSrc] = useState<string | null>(null)
@@ -103,6 +106,27 @@ export default function Duplicates() {
     refetchOnWindowFocus: false,
   })
   const groups = list.data?.groups ?? []
+
+  const sortedGroups = useMemo(() => {
+    const keepDir = (g: Group) => g.members[0]?.path.replace(/[\\/][^\\/]*$/, '') ?? ''
+    if (sort === 'size') {
+      const maxSize = (g: Group) => Math.max(...g.members.map((m) => m.size))
+      return [...groups].sort((a, b) => maxSize(b) - maxSize(a))
+    }
+    if (sort === 'path') {
+      return [...groups].sort((a, b) => keepDir(a).localeCompare(keepDir(b)))
+    }
+    // 'kind': preserve backend kind order; within the same kind sort by keep-member directory
+    return [...groups].sort((a, b) => {
+      if (a.kind !== b.kind) return 0
+      return keepDir(a).localeCompare(keepDir(b))
+    })
+  }, [groups, sort])
+
+  // 'kind' sort is meaningless when a single type is already filtered — fall back to 'path'.
+  useEffect(() => {
+    if (kind && sort === 'kind') setSort('path')
+  }, [kind])
 
   // Selection starts empty on every (re)load — never pre-select files for
   // deletion. Deleting is an explicit, deliberate action (see dup_select_others).
@@ -321,6 +345,17 @@ export default function Duplicates() {
             {formatSize(totalReclaimable)} {t('dup_reclaimable')}
           </span>
         )}
+        <div className="ml-auto">
+          <Segmented
+            value={sort}
+            onChange={setSort}
+            options={[
+              ...(!kind ? [{ value: 'kind' as SortKey, label: t('dup_sort_kind') }] : []),
+              { value: 'path', label: t('dup_sort_path') },
+              { value: 'size', label: t('dup_sort_size') },
+            ]}
+          />
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -360,7 +395,7 @@ export default function Duplicates() {
         <EmptyState text={t('dup_none')} />
       ) : (
         <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
-          {groups.map((g) => {
+          {sortedGroups.map((g) => {
             const isIgnored = g.ignored
             return (
             <div key={g.id} className={`rounded-2xl border border-line bg-surface-2 p-4 transition ${isIgnored ? 'opacity-40' : ''}`}>
