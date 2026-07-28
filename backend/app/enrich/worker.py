@@ -16,6 +16,7 @@ The work state lives entirely in the ``files`` rows, so the worker resumes
 naturally after a restart. It pauses whenever a task is running (see
 ``tasks.runner``) to avoid touching files an action is modifying.
 """
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 from .. import config, db, paths
 from ..tasks import runner
 from . import images, tools, videos
+
+log = logging.getLogger(__name__)
 
 # How many files to pull and process per cycle. A few multiples of the worker
 # count keeps every thread busy without holding a huge selection in memory.
@@ -137,27 +140,36 @@ def _claim_batch(limit: int) -> list:
 def _loop() -> None:
     global _current_file
     while not _stop.is_set():
-        # Yield to any running task (scan / action) to avoid file conflicts.
-        if runner.any_task_active():
-            _current_file = None
-            _stop.wait(PAUSE_SLEEP)
-            continue
+        try:
+            # Yield to any running task (scan / action) to avoid file conflicts.
+            if runner.any_task_active():
+                _current_file = None
+                _stop.wait(PAUSE_SLEEP)
+                continue
 
-        worker_count = max(1, int(config.get("worker_count")))
-        batch = _claim_batch(_batch_size(worker_count))
-        if not batch:
+            worker_count = max(1, int(config.get("worker_count")))
+            batch = _claim_batch(_batch_size(worker_count))
+            if not batch:
+                _current_file = None
+                _stop.wait(IDLE_SLEEP)
+                continue
+
+            if worker_count == 1:
+                for row in batch:
+                    if _stop.is_set():
+                        return
+                    _process_one(row)
+            else:
+                with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                    pool.map(_process_one, batch)
+        except Exception:
+            # Per-file failures are already caught in _process_one; this guards
+            # the loop itself (e.g. a _claim_batch DB error) so a transient
+            # failure pauses enrichment for one cycle instead of permanently
+            # killing this daemon thread with nothing to restart it.
             _current_file = None
+            log.exception("enrichment loop iteration failed; retrying in %ss", IDLE_SLEEP)
             _stop.wait(IDLE_SLEEP)
-            continue
-
-        if worker_count == 1:
-            for row in batch:
-                if _stop.is_set():
-                    return
-                _process_one(row)
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count) as pool:
-                pool.map(_process_one, batch)
 
 
 def start() -> None:

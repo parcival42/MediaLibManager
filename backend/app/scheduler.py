@@ -18,12 +18,15 @@ and are never blocked by it; the two are fully independent except that the
 serial queue still runs them one at a time.
 """
 import json
+import logging
 import threading
 from datetime import datetime
 
 from . import config, db, paths
 from .scan import inventory
 from .tasks import runner
+
+log = logging.getLogger(__name__)
 
 CHECK_INTERVAL = 60.0  # how often to re-check whether a scan is due
 
@@ -76,8 +79,15 @@ def _maybe_trigger() -> None:
 
 
 def _loop() -> None:
+    # An unhandled exception here would silently kill this daemon thread for
+    # the rest of the process's life (nothing restarts it) -- the nightly scan
+    # would then just never fire again until the container is restarted, with
+    # no visible error. Catch and log instead so the loop keeps checking.
     while not _stop.is_set():
-        _maybe_trigger()
+        try:
+            _maybe_trigger()
+        except Exception:
+            log.exception("scheduled scan check failed; will retry in %ss", CHECK_INTERVAL)
         _stop.wait(CHECK_INTERVAL)
 
 

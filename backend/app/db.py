@@ -45,6 +45,24 @@ CREATE INDEX IF NOT EXISTS idx_files_inode  ON files(st_dev, st_ino);
 CREATE INDEX IF NOT EXISTS idx_files_md5    ON files(md5);
 CREATE INDEX IF NOT EXISTS idx_files_type   ON files(type);
 CREATE INDEX IF NOT EXISTS idx_files_size   ON files(size);
+-- `present` gates almost every hot-path query (library listing, stats, dedup,
+-- enrichment pickup) but was previously unindexed, forcing a full scan of the
+-- files table -- including the large inline base64 blob columns -- on every
+-- page load. These composite indexes match the actual WHERE/ORDER BY shapes
+-- used across the codebase (present alone, plus the most common second filter).
+CREATE INDEX IF NOT EXISTS idx_files_present         ON files(present);
+CREATE INDEX IF NOT EXISTS idx_files_present_path    ON files(present, path);
+-- Covers stats.py's "WHERE present = 1 GROUP BY type" with SUM(size) as an
+-- index-only scan (no row lookups against the blob-bearing table needed).
+CREATE INDEX IF NOT EXISTS idx_files_present_type    ON files(present, type, size);
+-- Covers enrich/worker.py's status() aggregate (present, enrich_status, enrich_stage,
+-- size), which /api/enrichment/status exposes and the frontend polls every 2-5s
+-- while enrichment is active (TopNav.tsx, Tasks.tsx) -- a full unindexed scan
+-- repeating that often was likely the dominant source of sustained I/O, not just
+-- the one-time page load. The (present, enrich_status) prefix also covers
+-- worker.py's pending-file pickup and enrichment.py's error list, so a separate
+-- 2-column index would be redundant.
+CREATE INDEX IF NOT EXISTS idx_files_present_stage   ON files(present, enrich_status, enrich_stage, size);
 
 -- Pairs of files the user has marked as "not duplicates". Stored as normalised
 -- (file_id_a < file_id_b) edges; the rebuild skips DSU unions for these pairs.
@@ -153,6 +171,10 @@ def connect() -> sqlite3.Connection:
     # The enrichment worker writes from several threads at once; WAL plus a
     # busy timeout lets those writes serialize instead of failing immediately.
     con.execute("PRAGMA busy_timeout=5000")
+    # NORMAL is safe under WAL (durable across app crashes; only risks losing
+    # the last commit on an OS crash/power loss) and avoids an fsync on every
+    # write, which matters here since the enrichment worker commits per file.
+    con.execute("PRAGMA synchronous=NORMAL")
     return con
 
 

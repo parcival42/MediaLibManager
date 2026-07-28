@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { SVGProps } from 'react'
 import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
@@ -23,6 +24,25 @@ interface Task {
 
 const PAGE = 100
 const CARD_MIN = 200
+
+// Fetches the thumbnail by URL (browser-cached, see /api/media/{id}/thumb)
+// instead of inlining base64 into the library listing payload, and falls
+// back to the type icon on 404 (no thumbnail yet / non-visual file).
+function Thumb({ id, alt, icon: Icon }: { id: number; alt: string; icon: (p: SVGProps<SVGSVGElement>) => JSX.Element }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    return <Icon width={26} height={26} className="opacity-70 transition group-hover:text-accent group-hover:opacity-100" />
+  }
+  return (
+    <img
+      src={`/api/media/${id}/thumb`}
+      alt={alt}
+      loading="lazy"
+      className="h-full w-full object-cover"
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 export default function Library() {
   const { t } = useI18n()
@@ -187,20 +207,7 @@ export default function Library() {
                         className="group flex h-[160px] flex-col overflow-hidden rounded-2xl border border-line bg-surface-2 text-left transition hover:-translate-y-0.5 hover:border-surface-4 hover:shadow-card"
                       >
                         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-gradient-to-br from-surface-3 to-surface-2 text-ink-3">
-                          {it.thumbnail_b64 ? (
-                            <img
-                              src={`data:image/jpeg;base64,${it.thumbnail_b64}`}
-                              alt={it.filename}
-                              loading="lazy"
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <Icon
-                              width={26}
-                              height={26}
-                              className="opacity-70 transition group-hover:text-accent group-hover:opacity-100"
-                            />
-                          )}
+                          <Thumb id={it.id} alt={it.filename} icon={Icon} />
                           <span className="absolute left-2 top-2 rounded-md border border-line bg-bg/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-ink-2">
                             {it.type}
                           </span>

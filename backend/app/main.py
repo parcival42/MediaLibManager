@@ -3,6 +3,7 @@
 Wires up routers, initializes the database, marks orphaned tasks as interrupted
 on startup, and serves the built frontend (SPA fallback) when present.
 """
+import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +29,15 @@ from .enrich import worker as enrich_worker
 from .tasks import runner as task_runner
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# Root logging setup for the whole backend (no other module configures this).
+# Without a handler, exceptions logged by background threads (scheduler, task
+# runner, enrichment worker) would be silently dropped instead of reaching the
+# container's stdout/Docker logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager

@@ -15,7 +15,6 @@ export interface FileItem {
   width?: number
   height?: number
   duration?: number
-  thumbnail_b64?: string
   error?: string
   last_seen?: number
 }

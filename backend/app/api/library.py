@@ -16,8 +16,11 @@ from .. import auth, db, paths
 router = APIRouter(prefix="/api")
 
 CHUNK = 1024 * 256
+# thumbnail_b64 is deliberately excluded: the frontend fetches it via the
+# dedicated /media/{id}/thumb route instead, which keeps this listing payload
+# small and lets the browser cache thumbnails by URL (see media_thumbnail below).
 LIST_COLUMNS = ("id, path, type, size, enrich_status, enrich_stage, "
-                "width, height, duration, thumbnail_b64, error, last_seen")
+                "width, height, duration, error, last_seen")
 
 
 @router.get("/library")
