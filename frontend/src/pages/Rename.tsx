@@ -35,7 +35,7 @@ interface Task {
   progress: number
 }
 
-type FlatEntry = { kind: 'dir'; dir: string } | { kind: 'item'; item: RenameItem }
+type FlatEntry = { kind: 'dir'; dir: string; items: RenameItem[] } | { kind: 'item'; item: RenameItem }
 
 /** Poll a task until it reaches a terminal state, then fire `onDone` once. */
 function useTaskPolling(taskId: string | null, onDone: () => void) {
@@ -97,7 +97,7 @@ export default function Rename() {
   const flatList = useMemo<FlatEntry[]>(() => {
     const entries: FlatEntry[] = []
     for (const [dir, items] of grouped) {
-      entries.push({ kind: 'dir', dir })
+      entries.push({ kind: 'dir', dir, items })
       for (const item of items) entries.push({ kind: 'item', item })
     }
     return entries
@@ -113,6 +113,19 @@ export default function Rename() {
 
   const selectAll = () => {
     setSelected(new Set(renames.map((r) => r.file_id)))
+  }
+
+  const toggleGroup = (items: RenameItem[]) => {
+    const ids = items.map((i) => i.file_id)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      const allSelected = ids.every((id) => next.has(id))
+      for (const id of ids) {
+        if (allSelected) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
   }
 
   const [applyId, setApplyId] = useState<string | null>(null)
@@ -261,12 +274,27 @@ export default function Rename() {
                   style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
                 >
                   {entry.kind === 'dir' && (
-                    <div
-                      className={`truncate px-1 font-mono text-xs text-ink-3 ${vi.index === 0 ? 'pb-1' : 'pb-1 pt-4'}`}
-                      title={entry.dir}
+                    <label
+                      className={`flex cursor-pointer items-center gap-2 px-1 text-xs text-ink-3 ${vi.index === 0 ? 'pb-1' : 'pb-1 pt-4'}`}
                     >
-                      {entry.dir}
-                    </div>
+                      <input
+                        type="checkbox"
+                        title={t('ren_select_group')}
+                        checked={entry.items.every((i) => selected.has(i.file_id))}
+                        ref={(el) => {
+                          if (el) {
+                            const someSelected = entry.items.some((i) => selected.has(i.file_id))
+                            const allSelected = entry.items.every((i) => selected.has(i.file_id))
+                            el.indeterminate = someSelected && !allSelected
+                          }
+                        }}
+                        onChange={() => toggleGroup(entry.items)}
+                        className="h-3.5 w-3.5 shrink-0"
+                      />
+                      <span className="truncate font-mono" title={entry.dir}>
+                        {entry.dir}
+                      </span>
+                    </label>
                   )}
                   {entry.kind === 'item' && (
                     <div>
