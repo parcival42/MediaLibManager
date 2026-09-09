@@ -79,20 +79,32 @@ export default function Rename() {
   })
   const renames = list.data?.renames ?? []
   const pending = list.data?.pending ?? []
+  const collisionCount = useMemo(() => renames.filter((r) => r.collision).length, [renames])
+
+  const [onlyCollisions, setOnlyCollisions] = useState(false)
+  useEffect(() => {
+    if (onlyCollisions && collisionCount === 0) setOnlyCollisions(false)
+  }, [onlyCollisions, collisionCount])
 
   useEffect(() => {
     setSelected(new Set())
+    setOnlyCollisions(false)
   }, [list.data])
+
+  const visibleRenames = useMemo(
+    () => (onlyCollisions ? renames.filter((r) => r.collision) : renames),
+    [renames, onlyCollisions],
+  )
 
   const grouped = useMemo(() => {
     const byDir = new Map<string, RenameItem[]>()
-    for (const r of renames) {
+    for (const r of visibleRenames) {
       const arr = byDir.get(r.directory) ?? []
       arr.push(r)
       byDir.set(r.directory, arr)
     }
     return [...byDir.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [renames])
+  }, [visibleRenames])
 
   const flatList = useMemo<FlatEntry[]>(() => {
     const entries: FlatEntry[] = []
@@ -112,7 +124,7 @@ export default function Rename() {
     })
 
   const selectAll = () => {
-    setSelected(new Set(renames.map((r) => r.file_id)))
+    setSelected(new Set(visibleRenames.map((r) => r.file_id)))
   }
 
   const toggleGroup = (items: RenameItem[]) => {
@@ -223,10 +235,15 @@ export default function Rename() {
         <span>
           {renames.length.toLocaleString()} {t('ren_proposed_count')}
         </span>
-        {renames.some((r) => r.collision) && (
-          <span className="text-warn">
-            {renames.filter((r) => r.collision).length} {t('ren_collisions')}
-          </span>
+        {collisionCount > 0 && (
+          <button
+            onClick={() => setOnlyCollisions((v) => !v)}
+            className={`rounded-full px-2 py-0.5 text-xs font-medium transition ${
+              onlyCollisions ? 'bg-warn text-bg' : 'bg-warn/15 text-warn hover:bg-warn/25'
+            }`}
+          >
+            {collisionCount} {t('ren_collisions')}
+          </button>
         )}
         {pending.length > 0 && (
           <span>
