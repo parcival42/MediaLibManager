@@ -275,6 +275,18 @@ function SegmentEditor({
             />
             {t('ren_segment_clean_special_chars')}
           </label>
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={(segment.transforms ?? []).includes('strip_resolution')}
+              onChange={(e) => {
+                const set = new Set(segment.transforms ?? [])
+                e.target.checked ? set.add('strip_resolution') : set.delete('strip_resolution')
+                onChange({ ...segment, transforms: [...set] })
+              }}
+            />
+            {t('ren_segment_strip_resolution')}
+          </label>
           {stripFilters.length > 0 && (
             <span className="border-l border-line pl-4 font-medium text-ink-2">{t('ren_segment_strip_filters_label')}:</span>
           )}

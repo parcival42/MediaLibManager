@@ -246,6 +246,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   ren_segment_level: { de: 'Ebene', en: 'Level' },
   ren_segment_text: { de: 'Text', en: 'Text' },
   ren_segment_clean_special_chars: { de: 'Sonderzeichen bereinigen', en: 'Clean special characters' },
+  ren_segment_strip_resolution: { de: 'Im Dateinamen enthaltene Auflösung entfernen', en: 'Strip resolution already in filename' },
   ren_segment_strip_filters_label: { de: 'Strip-Filter', en: 'Strip filters' },
   ren_strip_filters_title: { de: 'Strip-Filter', en: 'Strip Filters' },
   ren_strip_filters_subtitle: {

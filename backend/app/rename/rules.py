@@ -97,16 +97,36 @@ def _render_duration(file_row: dict) -> tuple[str, bool]:
     return "", True  # not enriched yet
 
 
-def _render_filename(raw: str, seg: dict, filters_by_id: dict) -> str:
+def _strip_resolution(raw: str, width: int, height: int) -> str:
+    """Remove the file's own "WIDTHxHEIGHT" text from ``raw``.
+
+    Source filenames sometimes already embed the resolution (screen scrapes,
+    stock-photo exports); without this the resolution segment ends up
+    duplicated in the target name. Only the file's *actual* width/height is
+    matched (not any digit-x-digit pattern), so unrelated numbers are left
+    alone. Surrounding separators are swallowed together with the match so no
+    double separator is left behind.
+    """
+    pattern = re.compile(rf"[ ._-]*{width}\s*[x×X]\s*{height}[ ._-]*")
+    stripped = pattern.sub("_", raw)
+    return re.sub(r"[ _-]{2,}", "_", stripped)
+
+
+def _render_filename(raw: str, seg: dict, filters_by_id: dict, file_row: dict) -> str:
     value = raw
+    transforms = seg.get("transforms") or []
+    if "strip_resolution" in transforms:
+        width, height = file_row.get("width"), file_row.get("height")
+        if width and height:
+            value = _strip_resolution(value, width, height)
     for fid in seg.get("strip_filter_ids") or []:
         f = filters_by_id.get(int(fid))
         if f:
             value = _apply_strip_filter(value, f)
-    if "clean_special_chars" in (seg.get("transforms") or []):
+    if "clean_special_chars" in transforms:
         value = _clean_special_chars(value)
     value = re.sub(r" {2,}", " ", value)
-    return value.strip(" -.")
+    return value.strip(" -._")
 
 
 def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_by_id: dict) -> str | None:
@@ -144,7 +164,7 @@ def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_b
             prefix_val = _join(rendered, separator)
             prefix = prefix_val + separator if prefix_val else ""
             raw = stem[len(prefix):] if prefix and stem.startswith(prefix) else stem
-            value, seg_missing = _render_filename(raw, seg, filters_by_id), False
+            value, seg_missing = _render_filename(raw, seg, filters_by_id, file_row), False
         else:
             value, seg_missing = "", False
         missing = missing or seg_missing
