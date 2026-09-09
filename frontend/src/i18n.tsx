@@ -215,6 +215,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   ren_pending_count: { de: 'wartet auf Anreicherung', en: 'pending enrichment' },
   ren_select_all: { de: 'Alle auswählen', en: 'Select all' },
   ren_select_group: { de: 'Gruppe auswählen', en: 'Select group' },
+  ren_deselect_group: { de: 'Gruppe abwählen', en: 'Deselect group' },
   ren_apply: { de: 'Auswahl anwenden', en: 'Apply selected' },
   ren_applying: { de: 'Wird angewendet…', en: 'Applying…' },
   ren_apply_confirm: { de: 'Ausgewählte Dateien jetzt umbenennen?', en: 'Rename the selected files now?' },

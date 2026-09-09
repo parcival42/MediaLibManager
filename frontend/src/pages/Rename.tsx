@@ -291,27 +291,21 @@ export default function Rename() {
                   style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
                 >
                   {entry.kind === 'dir' && (
-                    <label
-                      className={`flex cursor-pointer items-center gap-2 px-1 text-xs text-ink-3 ${vi.index === 0 ? 'pb-1' : 'pb-1 pt-4'}`}
+                    <div
+                      className={`flex items-center gap-2 px-1 text-xs text-ink-3 ${vi.index === 0 ? 'pb-1' : 'pb-1 pt-4'}`}
                     >
-                      <input
-                        type="checkbox"
-                        title={t('ren_select_group')}
-                        checked={entry.items.every((i) => selected.has(i.file_id))}
-                        ref={(el) => {
-                          if (el) {
-                            const someSelected = entry.items.some((i) => selected.has(i.file_id))
-                            const allSelected = entry.items.every((i) => selected.has(i.file_id))
-                            el.indeterminate = someSelected && !allSelected
-                          }
-                        }}
-                        onChange={() => toggleGroup(entry.items)}
-                        className="h-3.5 w-3.5 shrink-0"
-                      />
-                      <span className="truncate font-mono" title={entry.dir}>
+                      <span className="min-w-0 flex-1 truncate font-mono" title={entry.dir}>
                         {entry.dir}
                       </span>
-                    </label>
+                      <button
+                        onClick={() => toggleGroup(entry.items)}
+                        className="shrink-0 text-accent hover:underline"
+                      >
+                        {entry.items.every((i) => selected.has(i.file_id))
+                          ? t('ren_deselect_group')
+                          : t('ren_select_group')}
+                      </button>
+                    </div>
                   )}
                   {entry.kind === 'item' && (
                     <div>
