@@ -25,6 +25,20 @@ directories that actually changed since ``_dir_cutoff``. Those tasks are
 tagged ``dir_watch: true`` -- deliberately *not* ``scheduled: true`` -- so
 they stay invisible to the full-scan due-check above.
 
+The check fires on clock-aligned minute boundaries (like cron's ``*/N``),
+not "N minutes after whenever it last ran": with a 5-minute interval it runs
+at :00/:05/:10/..., not at e.g. :23/:28/:33 depending on when the setting was
+saved. This makes the loop's own tick *phase* load-bearing: the four checks
+take non-zero time (DB connections, a tasks-table scan), so a naive fixed
+60-second wait would drift a little later every tick and eventually skip a
+minute value outright -- silently dropping an aligned check about once per
+cycle. ``_loop()`` instead re-aligns its wait to ``60 - (now % 60)`` each
+time so every wall-clock minute is visited exactly once. ``_dir_check_last_slot``
+(absolute minutes since the epoch) still de-dupes on top of that, mainly so
+an early return from ``_stop.wait()`` can't fire the same minute twice.
+Skipping a slot (e.g. because a task was active) does not reschedule
+anything -- it simply waits for the next aligned minute, same as cron would.
+
 ``_dir_cutoff`` is a single timestamp, not a per-directory table: a
 directory's mtime only advances, so "mtime >= cutoff" is enough to know it
 changed since then, without remembering its previous value. It only advances
@@ -64,7 +78,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config, db, paths
 from .maintenance import cleanup
@@ -74,14 +88,13 @@ from .tasks import runner
 
 log = logging.getLogger(__name__)
 
-CHECK_INTERVAL = 60.0  # how often to re-check whether a scan is due
-
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 
 # Directory-mtime fast path state (process-local, reset in start()).
 _dir_cutoff = 0.0
-_dir_check_last_run = 0.0
+_dir_check_last_run = 0.0            # display only
+_dir_check_last_slot: int | None = None  # absolute minute id; de-dupes within one aligned minute
 _dir_batch_task_ids: set[str] = set()
 _dir_batch_cutoff: float | None = None
 _dir_last_changed_count: int | None = None
@@ -169,26 +182,41 @@ def _poll_dir_batch() -> None:
     _dir_batch_cutoff = None
 
 
+def _next_aligned_epoch(interval_minutes: int, now: float | None = None) -> float:
+    """Next clock-aligned minute boundary strictly after the start of the
+    current minute -- e.g. interval=5 at 21:23:xx returns 21:25:00."""
+    dt = datetime.fromtimestamp(now if now is not None else time.time())
+    total = dt.hour * 60 + dt.minute
+    minutes_ahead = interval_minutes - (total % interval_minutes)
+    return (dt.replace(second=0, microsecond=0) + timedelta(minutes=minutes_ahead)).timestamp()
+
+
 def _maybe_dir_check() -> None:
-    global _dir_cutoff, _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
+    global _dir_cutoff, _dir_check_last_run, _dir_check_last_slot
+    global _dir_batch_task_ids, _dir_batch_cutoff
     global _dir_last_changed_count, _dir_last_enqueued_count
 
     if not config.get("dir_watch_enabled") or _dir_batch_task_ids:
         return
-    now = time.time()
-    interval = config.get("dir_watch_interval_minutes") * 60
-    if now - _dir_check_last_run < interval:
-        return
-    if runner.any_task_active():
-        return  # leave _dir_check_last_run alone so this retries next tick
 
-    _dir_check_last_run = now
+    interval = max(1, int(config.get("dir_watch_interval_minutes")))
+    now_dt = datetime.now()
+    if (now_dt.hour * 60 + now_dt.minute) % interval != 0:
+        return
+    slot = int(time.time() // 60)
+    if slot == _dir_check_last_slot:
+        return  # this aligned minute is already handled
+    if runner.any_task_active():
+        return  # skip this slot entirely; retry at the next aligned minute
+
+    _dir_check_last_slot = slot
+    _dir_check_last_run = time.time()
     root = paths.media_root()
     changed = dir_check.find_changed_dirs(root, _dir_cutoff)
     _dir_last_changed_count = len(changed)
     if not changed:
         _dir_last_enqueued_count = 0
-        _dir_cutoff = now
+        _dir_cutoff = _dir_check_last_run
         return
 
     ids = set()
@@ -197,22 +225,20 @@ def _maybe_dir_check() -> None:
         runner.enqueue(task_id, lambda ctx, scope=scope: inventory.run_inventory_scan(scope, ctx))
         ids.add(task_id)
     _dir_batch_task_ids = ids
-    _dir_batch_cutoff = now
+    _dir_batch_cutoff = _dir_check_last_run
     _dir_last_enqueued_count = len(ids)
 
 
 def dir_watch_status() -> dict:
     """Process-local diagnostic snapshot for the Settings UI -- see the module
     docstring for why this exists instead of a task-history row per tick."""
-    interval_minutes = config.get("dir_watch_interval_minutes")
+    interval_minutes = max(1, int(config.get("dir_watch_interval_minutes")))
     return {
         "enabled": config.get("dir_watch_enabled"),
         "interval_minutes": interval_minutes,
         "cutoff": _dir_cutoff or None,
         "last_check_at": _dir_check_last_run or None,
-        "next_check_at": (
-            _dir_check_last_run + interval_minutes * 60 if _dir_check_last_run else None
-        ),
+        "next_check_at": _next_aligned_epoch(interval_minutes),
         "dirs_changed_last_check": _dir_last_changed_count,
         "tasks_enqueued_last_check": _dir_last_enqueued_count,
         "batch_in_flight": bool(_dir_batch_task_ids),
@@ -257,7 +283,7 @@ def _guarded(name: str, fn) -> None:
         _last_error[name] = None
     except Exception as exc:
         _last_error[name] = str(exc)
-        log.exception("%s check failed; will retry in %ss", name, CHECK_INTERVAL)
+        log.exception("%s check failed; will retry on the next tick", name)
 
 
 def _loop() -> None:
@@ -270,18 +296,26 @@ def _loop() -> None:
         _guarded("dir_batch", _poll_dir_batch)
         _guarded("dir_check", _maybe_dir_check)
         _guarded("auto_strip", _maybe_auto_strip)
-        _stop.wait(CHECK_INTERVAL)
+        # Re-align to the wall clock instead of waiting a fixed 60s
+        # from whenever the checks above finished: their own runtime (DB
+        # connections, a tasks-table scan) would otherwise make the tick phase
+        # drift later each time until it skips a minute value outright -- which
+        # for the clock-aligned dir-watch check above means silently missing
+        # an aligned minute. This keeps every wall-clock minute visited once.
+        _stop.wait(60.0 - (time.time() % 60.0) + 1.0)
 
 
 def start() -> None:
     """Start the scheduler thread (idempotent)."""
-    global _thread, _dir_cutoff, _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
+    global _thread, _dir_cutoff, _dir_check_last_run, _dir_check_last_slot
+    global _dir_batch_task_ids, _dir_batch_cutoff
     global _dir_last_changed_count, _dir_last_enqueued_count, _auto_strip_task_id
     if _thread and _thread.is_alive():
         return
     _stop.clear()
     _dir_cutoff = time.time()
     _dir_check_last_run = 0.0
+    _dir_check_last_slot = None
     _dir_batch_task_ids = set()
     _dir_batch_cutoff = None
     _dir_last_changed_count = None
