@@ -52,10 +52,6 @@ const STRINGS: Record<string, { de: string; en: string }> = {
 
   settings_saved: { de: 'Gespeichert.', en: 'Saved.' },
   save: { de: 'Speichern', en: 'Save' },
-  settings_metadata_empty: {
-    de: 'Für Metadaten gibt es aktuell keine Einstellungen.',
-    en: 'No settings for Metadata yet.',
-  },
 
   scan: { de: 'Scan starten', en: 'Start scan' },
   scanning: { de: 'Scan läuft…', en: 'Scanning…' },
@@ -318,6 +314,18 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   settings_dir_watch_hint: {
     de: 'Prüft nur Verzeichnis-Zeitstempel (billig) und scannt gezielt nur geänderte Verzeichnisse. Ersetzt nicht den vollen Scan oben.',
     en: 'Only checks directory timestamps (cheap) and scans just the changed directories. Does not replace the full scan above.',
+  },
+  settings_schedule_cleanup_enabled: {
+    de: 'Nach dem Scan verwaiste Einträge bereinigen',
+    en: 'Clean up stale entries after the scan',
+  },
+  settings_auto_strip_enabled: {
+    de: 'Erkannte Dateien automatisch von Title/Comment-Metadaten befreien',
+    en: 'Automatically strip Title/Comment metadata from detected files',
+  },
+  settings_auto_strip_hint: {
+    de: 'Läuft im Hintergrund, sobald Dateien erkannt und ausreichend angereichert wurden. Fehlgeschlagene Dateien werden nicht automatisch erneut versucht (manuell weiterhin möglich).',
+    en: 'Runs in the background once files are detected and sufficiently enriched. Files that already failed are not retried automatically (manual retry still possible).',
   },
   day_mon: { de: 'Mo', en: 'Mon' },
   day_tue: { de: 'Di', en: 'Tue' },

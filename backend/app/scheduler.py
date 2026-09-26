@@ -35,6 +35,20 @@ and idempotent) rather than silently skipping a directory that was never
 actually reconciled. The cutoff is process-local and resets to "now" on every
 restart (matching the rest of the task system's "no resume" model) — the
 daily full scan is what catches anything missed across a restart.
+
+Two more settings piggyback on this same loop:
+
+- ``scan_schedule_cleanup_enabled`` chains a ``maintenance_cleanup`` task
+  right after the scheduled full scan (see ``maintenance.cleanup``) -- the
+  scan's own ``present`` flag never deletes a row (a missing path might be a
+  pending rename), so this is what actually removes rows for files that are
+  really gone. Queued unconditionally after the scan; cleanup re-verifies
+  every row itself and has its own guard against mass-deleting on a bad
+  mount, so it does not need to know whether the scan succeeded.
+- ``metadata_auto_strip_enabled`` periodically enqueues a ``metadata_strip``
+  task for whatever ``metadata.strip.auto_candidate_ids()`` currently
+  returns -- the same eligibility as the manual "Remove metadata" UI, minus
+  files that already failed the integrity check once (see that function).
 """
 import json
 import logging
@@ -43,6 +57,8 @@ import time
 from datetime import datetime
 
 from . import config, db, paths
+from .maintenance import cleanup
+from .metadata import strip
 from .scan import dir_check, inventory
 from .tasks import runner
 
@@ -58,6 +74,9 @@ _dir_cutoff = 0.0
 _dir_check_last_run = 0.0
 _dir_batch_task_ids: set[str] = set()
 _dir_batch_cutoff: float | None = None
+
+# Auto metadata-strip state (process-local, reset in start()).
+_auto_strip_task_id: str | None = None
 
 
 def _last_scheduled_scan_at() -> float | None:
@@ -102,6 +121,10 @@ def _maybe_trigger() -> None:
     scope = paths.media_root()
     task_id = runner.create_task("scan", {"directory": str(scope), "scheduled": True})
     runner.enqueue(task_id, lambda ctx: inventory.run_inventory_scan(scope, ctx))
+
+    if config.get("scan_schedule_cleanup_enabled"):
+        cleanup_task_id = runner.create_task("maintenance_cleanup", {"scheduled": True})
+        runner.enqueue(cleanup_task_id, cleanup.run_cleanup)
 
 
 def _poll_dir_batch() -> None:
@@ -157,6 +180,33 @@ def _maybe_dir_check() -> None:
     _dir_batch_cutoff = now
 
 
+def _maybe_auto_strip() -> None:
+    """Keep at most one auto-strip batch in flight; see the module docstring
+    for why files that already failed once are excluded from it."""
+    global _auto_strip_task_id
+
+    if not config.get("metadata_auto_strip_enabled"):
+        return
+    if _auto_strip_task_id is not None:
+        con = db.connect()
+        row = con.execute(
+            "SELECT status FROM tasks WHERE id = ?", (_auto_strip_task_id,)
+        ).fetchone()
+        con.close()
+        if row and row["status"] in ("queued", "running"):
+            return
+        _auto_strip_task_id = None
+    if runner.any_task_active():
+        return
+
+    ids = strip.auto_candidate_ids()
+    if not ids:
+        return
+    task_id = runner.create_task("metadata_strip", {"count": len(ids), "auto": True})
+    runner.enqueue(task_id, lambda ctx: strip.apply_strip(ids, ctx))
+    _auto_strip_task_id = task_id
+
+
 def _loop() -> None:
     # An unhandled exception here would silently kill this daemon thread for
     # the rest of the process's life (nothing restarts it) -- the nightly scan
@@ -167,6 +217,7 @@ def _loop() -> None:
             _maybe_trigger()
             _poll_dir_batch()
             _maybe_dir_check()
+            _maybe_auto_strip()
         except Exception:
             log.exception("scheduled scan check failed; will retry in %ss", CHECK_INTERVAL)
         _stop.wait(CHECK_INTERVAL)
@@ -175,6 +226,7 @@ def _loop() -> None:
 def start() -> None:
     """Start the scheduler thread (idempotent)."""
     global _thread, _dir_cutoff, _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
+    global _auto_strip_task_id
     if _thread and _thread.is_alive():
         return
     _stop.clear()
@@ -182,6 +234,7 @@ def start() -> None:
     _dir_check_last_run = 0.0
     _dir_batch_task_ids = set()
     _dir_batch_cutoff = None
+    _auto_strip_task_id = None
     _thread = threading.Thread(target=_loop, name="scan-scheduler", daemon=True)
     _thread.start()
 

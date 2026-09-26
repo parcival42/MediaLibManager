@@ -136,6 +136,14 @@ function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settin
           ))}
         </div>
       </div>
+      <label className="flex items-center gap-2 text-sm text-ink-1">
+        <input
+          type="checkbox"
+          checked={Boolean(form.scan_schedule_cleanup_enabled)}
+          onChange={(e) => setForm({ ...form, scan_schedule_cleanup_enabled: e.target.checked })}
+        />
+        {t('settings_schedule_cleanup_enabled')}
+      </label>
       <p className="text-xs text-ink-3">{t('settings_schedule_local_hint')}</p>
     </div>
   )
@@ -167,6 +175,25 @@ function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settin
         />
       </label>
       <p className="text-xs text-ink-3">{t('settings_dir_watch_hint')}</p>
+    </div>
+  )
+}
+
+function AutoStripFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
+  const { t } = useI18n()
+  const enabled = Boolean(form.metadata_auto_strip_enabled)
+
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="flex items-center gap-2 text-sm text-ink-1">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setForm({ ...form, metadata_auto_strip_enabled: e.target.checked })}
+        />
+        {t('settings_auto_strip_enabled')}
+      </label>
+      <p className="text-xs text-ink-3">{t('settings_auto_strip_hint')}</p>
     </div>
   )
 }
@@ -252,6 +279,8 @@ export default function SettingsPage() {
     payload.scan_schedule_days = Array.isArray(form.scan_schedule_days) ? form.scan_schedule_days : []
     payload.dir_watch_enabled = Boolean(form.dir_watch_enabled)
     payload.dir_watch_interval_minutes = Number(form.dir_watch_interval_minutes ?? 5)
+    payload.scan_schedule_cleanup_enabled = Boolean(form.scan_schedule_cleanup_enabled)
+    payload.metadata_auto_strip_enabled = Boolean(form.metadata_auto_strip_enabled)
     const updated = await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) })
     setForm(updated)
     setSaved(true)
@@ -310,7 +339,9 @@ export default function SettingsPage() {
           )}
           {section === 'rename' && <RenameRulesEditor />}
           {section === 'metadata' && (
-            <p className="text-sm text-ink-3">{t('settings_metadata_empty')}</p>
+            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved}>
+              <AutoStripFields form={form} setForm={setForm} />
+            </FieldSection>
           )}
           {section === 'maintenance' && <MaintenancePanel />}
         </div>

@@ -36,25 +36,27 @@ DURATION_EPSILON = 0.5
 
 _CANDIDATE_COLUMNS = "id, path, size, duration, frame_hashes"
 
+# Shared eligibility for both the UI candidate list and unattended auto-strip:
+# restricted to the MP4 family because ``has_title_comment`` is set whenever
+# exiftool can *read* a Title/Comment on any video container, but its *write*
+# support is format-dependent -- containers like .mkv/.wmv/.flv are typically
+# read-only there, which would make such a file error on every strip attempt
+# and reappear as a candidate forever. MP4/M4V/MOV is the deliberately
+# limited, proven write scope.
+_BASE_CANDIDATE_CONDITIONS = [
+    "present = 1", "type = 'video'", "has_title_comment = 1", "frame_hashes IS NOT NULL",
+    "(path LIKE '%.mp4' OR path LIKE '%.m4v' OR path LIKE '%.mov')",
+]
+
 
 def candidates(directory: str | None = None) -> list[dict]:
     """Present videos flagged with Title/Comment that have an enriched frame
     baseline to verify against (stage 2 enrichment). Files not yet at that
     stage simply aren't offered yet -- they show up once enrichment catches up.
-
-    Restricted to the MP4 family: ``has_title_comment`` is set whenever
-    exiftool can *read* a Title/Comment on any video container, but its
-    *write* support is format-dependent -- containers like .mkv/.wmv/.flv are
-    typically read-only there, which would make such a file error on every
-    strip attempt and reappear as a candidate forever. MP4/M4V/MOV is the
-    deliberately limited, proven write scope.
     """
     con = db.connect()
     try:
-        where = [
-            "present = 1", "type = 'video'", "has_title_comment = 1", "frame_hashes IS NOT NULL",
-            "(path LIKE '%.mp4' OR path LIKE '%.m4v' OR path LIKE '%.mov')",
-        ]
+        where = list(_BASE_CANDIDATE_CONDITIONS)
         params: list = []
         if directory:
             like = directory.rstrip(os.sep) + os.sep + "%"
@@ -87,6 +89,25 @@ def candidates(directory: str | None = None) -> list[dict]:
             "fields": fields_by_path.get(r["path"], []),
         })
     return out
+
+
+def auto_candidate_ids() -> list[int]:
+    """Candidate ids for unattended stripping (``metadata_auto_strip_enabled``).
+
+    Same eligibility as ``candidates()`` but skips the live exiftool field
+    read (only needed to show the UI what would be removed) and excludes any
+    path with a prior 'failed' integrity check -- retrying those every cycle
+    would just repeat the same failure since nothing about the file changes
+    between checks. A manual retry from the UI is still possible.
+    """
+    con = db.connect()
+    try:
+        where = list(_BASE_CANDIDATE_CONDITIONS)
+        where.append("path NOT IN (SELECT path FROM metadata_history WHERE status = 'failed')")
+        rows = con.execute(f"SELECT id FROM files WHERE {' AND '.join(where)}").fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        con.close()
 
 
 def _check_integrity(path: str, duration: float, before_fmt: dict, baseline_hashes: list[str]) -> tuple[str, str]:
