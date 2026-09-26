@@ -2,8 +2,20 @@
 
 Values are kept as JSON in the `settings` table. DEFAULTS apply until a value
 has been set explicitly.
+
+Reads are cached in memory: every ``get``/``get_all`` used to open its own
+SQLite connection (plus the PRAGMA setup in ``db.connect()``) just to read
+one value, which added up once several background loops (scan scheduler,
+dir-watch, auto-strip) started polling config every tick. ``set``/``set_many``
+are the only way settings change in this app, and they update the cache
+directly, so it never goes stale for in-process reads -- there is no TTL
+because nothing outside this module writes to the `settings` table. This
+relies on the app running as a single process (see the Dockerfile's plain
+``uvicorn`` entrypoint, no ``--workers``); a multi-process deployment would
+need a shared invalidation signal instead.
 """
 import json
+import threading
 
 from . import db
 
@@ -33,17 +45,11 @@ DEFAULTS = {
     "worker_count":          4,      # parallel threads during enrichment
 }
 
-
-def get(key: str, default=None):
-    con = db.connect()
-    row = con.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    con.close()
-    if row is None:
-        return DEFAULTS.get(key, default)
-    return json.loads(row["value"])
+_cache: dict | None = None
+_cache_lock = threading.Lock()
 
 
-def get_all() -> dict:
+def _load() -> dict:
     con = db.connect()
     rows = con.execute("SELECT key, value FROM settings").fetchall()
     con.close()
@@ -51,6 +57,22 @@ def get_all() -> dict:
     for r in rows:
         result[r["key"]] = json.loads(r["value"])
     return result
+
+
+def _ensure_cache() -> dict:
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            _cache = _load()
+        return _cache
+
+
+def get(key: str, default=None):
+    return _ensure_cache().get(key, default)
+
+
+def get_all() -> dict:
+    return dict(_ensure_cache())
 
 
 def set_many(values: dict) -> None:
@@ -63,6 +85,13 @@ def set_many(values: dict) -> None:
         )
     con.commit()
     con.close()
+
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            _cache = _load()
+        else:
+            _cache.update(values)
 
 
 def set(key: str, value) -> None:
