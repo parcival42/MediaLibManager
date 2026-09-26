@@ -22,6 +22,7 @@ const SECTIONS: { key: SectionKey; labelKey: string }[] = [
 const LIBRARY_FIELDS: { key: string; labelKey: string }[] = [
   { key: 'media_root', labelKey: 'settings_field_media_root' },
   { key: 'worker_count', labelKey: 'settings_field_worker_count' },
+  { key: 'task_history_retention_days', labelKey: 'settings_field_task_retention' },
 ]
 
 const WEEKDAYS: { idx: number; key: string }[] = [

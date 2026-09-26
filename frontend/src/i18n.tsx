@@ -343,6 +343,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
 
   settings_field_media_root: { de: 'Medienpfad', en: 'Media root' },
   settings_field_worker_count: { de: 'Enrichment-Worker', en: 'Worker count' },
+  settings_field_task_retention: {
+    de: 'Task-Historie aufbewahren (Tage)',
+    en: 'Keep task history (days)',
+  },
   settings_field_phash_threshold: { de: 'Bild-pHash-Schwellwert (Hamming)', en: 'Image pHash threshold (Hamming)' },
   settings_field_video_frame_threshold: { de: 'Video-Frame-Schwellwert (Hamming)', en: 'Video frame threshold (Hamming)' },
   settings_field_video_min_matches: { de: 'Video min. Frame-Treffer (von 5)', en: 'Video min. frame matches (of 5)' },

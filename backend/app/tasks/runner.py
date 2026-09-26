@@ -10,6 +10,11 @@ The enrichment worker pauses while a task is running (the ``_idle`` gate) so the
 two never touch files at the same time. Cancellation is cooperative: the task id
 is added to ``_cancel_requested`` and the running callable observes it via
 ``ctx.cancelled`` / ``ctx.raise_if_cancelled()`` between items.
+
+``_prune_history`` deletes finished rows older than
+``task_history_retention_days`` after every successful completion, so the
+table does not grow without bound now that dir-watch and auto-strip can
+enqueue tasks on their own periodic schedule rather than only on user action.
 """
 import json
 import queue
@@ -17,7 +22,7 @@ import threading
 import time
 import uuid
 
-from .. import db
+from .. import config, db
 
 
 class TaskCancelled(Exception):
@@ -138,6 +143,26 @@ def request_cancel(task_id: str) -> str | None:
     return "cancelling" if running_now else "cancelled"
 
 
+def _prune_history() -> None:
+    """Delete finished task rows older than ``task_history_retention_days``.
+
+    Runs after every successfully completed task (see ``_run_one``) rather
+    than on its own schedule -- an error/cancelled/interrupted task is left
+    alone so it stays visible in the history until a later success sweeps it
+    away, instead of silently disappearing on its own account.
+    """
+    retention_days = max(1, int(config.get("task_history_retention_days")))
+    cutoff = time.time() - retention_days * 86400
+    con = db.connect()
+    con.execute(
+        "DELETE FROM tasks WHERE status NOT IN ('queued', 'running') "
+        "AND COALESCE(ended_at, created_at) < ?",
+        (cutoff,),
+    )
+    con.commit()
+    con.close()
+
+
 def _run_one(task_id: str, fn) -> None:
     global _running_task_id
 
@@ -163,6 +188,7 @@ def _run_one(task_id: str, fn) -> None:
         else:
             _update(task_id, status="done", progress=100, ended_at=time.time(),
                     result=json.dumps(result))
+            _prune_history()
     except TaskCancelled:
         _update(task_id, status="cancelled", ended_at=time.time())
     except Exception as exc:  # noqa: BLE001 - surfaced to the user via the task log
