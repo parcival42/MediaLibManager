@@ -17,12 +17,15 @@ table does not grow without bound now that dir-watch and auto-strip can
 enqueue tasks on their own periodic schedule rather than only on user action.
 """
 import json
+import logging
 import queue
 import threading
 import time
 import uuid
 
 from .. import config, db
+
+log = logging.getLogger(__name__)
 
 
 class TaskCancelled(Exception):
@@ -188,7 +191,13 @@ def _run_one(task_id: str, fn) -> None:
         else:
             _update(task_id, status="done", progress=100, ended_at=time.time(),
                     result=json.dumps(result))
-            _prune_history()
+            # Deliberately outside the try's own error path: a prune failure
+            # (e.g. a busy DB) must not flip this already-successful task's
+            # recorded status to 'error' -- it's unrelated housekeeping.
+            try:
+                _prune_history()
+            except Exception:
+                log.exception("task history prune failed after task %s", task_id)
     except TaskCancelled:
         _update(task_id, status="cancelled", ended_at=time.time())
     except Exception as exc:  # noqa: BLE001 - surfaced to the user via the task log

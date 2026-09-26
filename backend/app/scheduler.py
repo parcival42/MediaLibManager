@@ -110,16 +110,24 @@ _last_error: dict[str, str | None] = {
 
 
 def _last_scheduled_scan_at() -> float | None:
-    """Most recent ``created_at`` of a scan the scheduler itself created.
+    """Most recent ``created_at`` of a *successfully completed* scan the
+    scheduler itself created.
 
     Inspects ``params`` in Python rather than matching the JSON string so this
     stays correct if scan params ever gain extra keys. Manual scans (started
     from the UI) never carry the ``scheduled`` marker, so they are invisible
     here and never affect the daily schedule.
+
+    Only ``status = 'done'`` counts as "today's scan already happened" --
+    otherwise a scan that got marked ``interrupted`` by a container restart
+    right around the scheduled time (or one that errored/was cancelled)
+    would still count, and the real scan would then silently never run for
+    the rest of that day.
     """
     con = db.connect()
     rows = con.execute(
-        "SELECT params, created_at FROM tasks WHERE type = 'scan' ORDER BY created_at DESC"
+        "SELECT params, created_at FROM tasks WHERE type = 'scan' AND status = 'done' "
+        "ORDER BY created_at DESC"
     ).fetchall()
     con.close()
     for row in rows:

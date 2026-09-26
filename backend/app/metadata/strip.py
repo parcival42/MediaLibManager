@@ -96,14 +96,20 @@ def auto_candidate_ids() -> list[int]:
 
     Same eligibility as ``candidates()`` but skips the live exiftool field
     read (only needed to show the UI what would be removed) and excludes any
-    path with a prior 'failed' integrity check -- retrying those every cycle
-    would just repeat the same failure since nothing about the file changes
-    between checks. A manual retry from the UI is still possible.
+    path with a prior failed attempt -- both a failed integrity check
+    (``status = 'failed'``) and a tool error (probe/strip itself failing,
+    recorded as ``status = 'error'`` in ``apply_strip``) mean retrying on the
+    next cycle would just repeat the same outcome, since nothing about the
+    file changes between checks; without this a permanently erroring file
+    would re-enqueue a strip task (and pause enrichment) every cycle forever.
+    A manual retry from the UI is still possible.
     """
     con = db.connect()
     try:
         where = list(_BASE_CANDIDATE_CONDITIONS)
-        where.append("path NOT IN (SELECT path FROM metadata_history WHERE status = 'failed')")
+        where.append(
+            "path NOT IN (SELECT path FROM metadata_history WHERE status IN ('failed', 'error'))"
+        )
         rows = con.execute(f"SELECT id FROM files WHERE {' AND '.join(where)}").fetchall()
         return [r["id"] for r in rows]
     finally:
@@ -188,6 +194,7 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
             except ValueError:
                 errors += 1
                 ctx.log(f"SKIP (outside media root): {path}")
+                _record_history(con, path, "skipped", "skipped", None, "error", "outside media root")
                 continue
 
             try:

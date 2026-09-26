@@ -236,6 +236,7 @@ function FieldSection({
           <label key={f.key} className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-ink-2">{t(f.labelKey)}</span>
             <Input
+              type={f.key === 'media_root' ? 'text' : 'number'}
               value={(form[f.key] as string | number) ?? ''}
               onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
             />
