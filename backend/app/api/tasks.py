@@ -21,12 +21,31 @@ def _row_to_task(row) -> dict:
 
 
 @router.get("/tasks")
-def list_tasks(_: str = Depends(auth.current_user)):
+def list_tasks(
+    limit: int = 50,
+    before: float | None = None,
+    _: str = Depends(auth.current_user),
+):
+    """List tasks newest-first, ``limit`` at a time.
+
+    Without ``before`` this is the first page (current queue + most recent
+    history, same as always). Pass ``before`` (a task's ``created_at``) to
+    page further back -- a currently active task is always newer than
+    anything in the history pages, so it never resurfaces there.
+    """
     con = db.connect()
-    rows = con.execute(
-        "SELECT id, type, status, params, progress, result, created_at, started_at, ended_at "
-        "FROM tasks ORDER BY created_at DESC LIMIT 50"
-    ).fetchall()
+    if before is None:
+        rows = con.execute(
+            "SELECT id, type, status, params, progress, result, created_at, started_at, ended_at "
+            "FROM tasks ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT id, type, status, params, progress, result, created_at, started_at, ended_at "
+            "FROM tasks WHERE created_at < ? ORDER BY created_at DESC LIMIT ?",
+            (before, limit),
+        ).fetchall()
     con.close()
     return [_row_to_task(r) for r in rows]
 

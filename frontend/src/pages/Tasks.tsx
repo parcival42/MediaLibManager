@@ -355,15 +355,27 @@ function Detail({ label, value }: { label: string; value: unknown }) {
   )
 }
 
+const PAGE_SIZE = 50
+
 export default function Tasks() {
   const { t } = useI18n()
   const { data } = useQuery<Task[]>({
     queryKey: ['tasks'],
-    queryFn: () => api<Task[]>('/api/tasks'),
+    queryFn: () => api<Task[]>(`/api/tasks?limit=${PAGE_SIZE}`),
     // Poll briskly while anything is active, then idle back to a slow refresh.
     refetchInterval: (query) =>
       query.state.data?.some((x) => ACTIVE.has(x.status)) ? 1500 : 8000,
   })
+
+  // Older history pages, fetched on demand via "load more" -- kept separate
+  // from the polled first page so a routine poll never re-triggers pagination
+  // state or duplicates rows.
+  const [olderHistory, setOlderHistory] = useState<Task[]>([])
+  const [loadingMore, setLoadingMore] = useState(false)
+  // null until a "load more" page has been fetched -- until then, whether
+  // there's more depends on whether the (still-polling) first page was full.
+  const [moreAfterOlder, setMoreAfterOlder] = useState<boolean | null>(null)
+  const hasMore = moreAfterOlder ?? (data?.length ?? 0) >= PAGE_SIZE
 
   const running = data?.filter((x) => x.status === 'running') ?? []
   const queued = (data?.filter((x) => x.status === 'queued') ?? []).sort(
@@ -371,7 +383,20 @@ export default function Tasks() {
   )
   const queue = [...running, ...queued]
   // /api/tasks is already ordered newest-first, which is what history wants.
-  const history = data?.filter((x) => !ACTIVE.has(x.status)) ?? []
+  const history = [...(data?.filter((x) => !ACTIVE.has(x.status)) ?? []), ...olderHistory]
+
+  const loadMore = async () => {
+    const oldest = history.at(-1)?.created_at
+    if (oldest === undefined) return
+    setLoadingMore(true)
+    try {
+      const more = await api<Task[]>(`/api/tasks?limit=${PAGE_SIZE}&before=${oldest}`)
+      setOlderHistory((prev) => [...prev, ...more])
+      setMoreAfterOlder(more.length === PAGE_SIZE)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -407,6 +432,11 @@ export default function Tasks() {
               {history.map((task) => (
                 <TaskCard key={task.id} task={task} />
               ))}
+              {hasMore && (
+                <Button variant="subtle" size="sm" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? t('tasks_loading_more') : t('tasks_load_more')}
+                </Button>
+              )}
             </div>
           )}
         </section>

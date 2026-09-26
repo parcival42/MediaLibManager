@@ -108,6 +108,8 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   tasks_none: { de: 'Noch keine Tasks.', en: 'No tasks yet.' },
   tasks_section_queue: { de: 'Warteschlange', en: 'Queue' },
   tasks_section_history: { de: 'Verlauf', en: 'History' },
+  tasks_load_more: { de: 'Mehr laden', en: 'Load more' },
+  tasks_loading_more: { de: 'Lädt…', en: 'Loading…' },
   tasks_queue_empty: { de: 'Keine laufenden oder gequeueten Tasks.', en: 'No running or queued tasks.' },
   enrich_errors_label: { de: 'Fehler', en: 'Errors' },
   enrich_error_unknown: { de: 'Keine Fehlermeldung.', en: 'No error message.' },
