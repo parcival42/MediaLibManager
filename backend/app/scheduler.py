@@ -49,6 +49,16 @@ Two more settings piggyback on this same loop:
   task for whatever ``metadata.strip.auto_candidate_ids()`` currently
   returns -- the same eligibility as the manual "Remove metadata" UI, minus
   files that already failed the integrity check once (see that function).
+
+The dir-watch pre-check deliberately never creates a task row when nothing
+changed (that's the whole point -- most ticks do nothing), which makes it
+invisible by default. ``dir_watch_status()`` exposes the process-local state
+behind it (last run, what that run found, any exception) so the UI can show
+something without spamming the task history with empty runs. Each of the
+four checks in ``_loop()`` is wrapped separately (``_guarded``) so one
+throwing does not also skip the others for that tick, and so the exception
+lands in ``_last_error`` under its own name instead of one shared, anonymous
+"something failed" log line.
 """
 import json
 import logging
@@ -74,9 +84,16 @@ _dir_cutoff = 0.0
 _dir_check_last_run = 0.0
 _dir_batch_task_ids: set[str] = set()
 _dir_batch_cutoff: float | None = None
+_dir_last_changed_count: int | None = None
+_dir_last_enqueued_count: int | None = None
 
 # Auto metadata-strip state (process-local, reset in start()).
 _auto_strip_task_id: str | None = None
+
+# Per-check last exception, keyed by check name (process-local, reset in start()).
+_last_error: dict[str, str | None] = {
+    "trigger": None, "dir_batch": None, "dir_check": None, "auto_strip": None,
+}
 
 
 def _last_scheduled_scan_at() -> float | None:
@@ -154,6 +171,7 @@ def _poll_dir_batch() -> None:
 
 def _maybe_dir_check() -> None:
     global _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
+    global _dir_last_changed_count, _dir_last_enqueued_count
 
     if not config.get("dir_watch_enabled") or _dir_batch_task_ids:
         return
@@ -167,7 +185,9 @@ def _maybe_dir_check() -> None:
     _dir_check_last_run = now
     root = paths.media_root()
     changed = dir_check.find_changed_dirs(root, _dir_cutoff)
+    _dir_last_changed_count = len(changed)
     if not changed:
+        _dir_last_enqueued_count = 0
         _dir_cutoff = now
         return
 
@@ -178,6 +198,26 @@ def _maybe_dir_check() -> None:
         ids.add(task_id)
     _dir_batch_task_ids = ids
     _dir_batch_cutoff = now
+    _dir_last_enqueued_count = len(ids)
+
+
+def dir_watch_status() -> dict:
+    """Process-local diagnostic snapshot for the Settings UI -- see the module
+    docstring for why this exists instead of a task-history row per tick."""
+    interval_minutes = config.get("dir_watch_interval_minutes")
+    return {
+        "enabled": config.get("dir_watch_enabled"),
+        "interval_minutes": interval_minutes,
+        "cutoff": _dir_cutoff or None,
+        "last_check_at": _dir_check_last_run or None,
+        "next_check_at": (
+            _dir_check_last_run + interval_minutes * 60 if _dir_check_last_run else None
+        ),
+        "dirs_changed_last_check": _dir_last_changed_count,
+        "tasks_enqueued_last_check": _dir_last_enqueued_count,
+        "batch_in_flight": bool(_dir_batch_task_ids),
+        "last_error": _last_error["dir_check"],
+    }
 
 
 def _maybe_auto_strip() -> None:
@@ -207,26 +247,36 @@ def _maybe_auto_strip() -> None:
     _auto_strip_task_id = task_id
 
 
+def _guarded(name: str, fn) -> None:
+    """Run one check in isolation: an exception here must not also skip the
+    other checks in this tick (they used to share one try/except), and gets
+    recorded under its own name in ``_last_error`` instead of one generic,
+    anonymous log line -- see ``dir_watch_status()``."""
+    try:
+        fn()
+        _last_error[name] = None
+    except Exception as exc:
+        _last_error[name] = str(exc)
+        log.exception("%s check failed; will retry in %ss", name, CHECK_INTERVAL)
+
+
 def _loop() -> None:
     # An unhandled exception here would silently kill this daemon thread for
     # the rest of the process's life (nothing restarts it) -- the nightly scan
     # would then just never fire again until the container is restarted, with
     # no visible error. Catch and log instead so the loop keeps checking.
     while not _stop.is_set():
-        try:
-            _maybe_trigger()
-            _poll_dir_batch()
-            _maybe_dir_check()
-            _maybe_auto_strip()
-        except Exception:
-            log.exception("scheduled scan check failed; will retry in %ss", CHECK_INTERVAL)
+        _guarded("trigger", _maybe_trigger)
+        _guarded("dir_batch", _poll_dir_batch)
+        _guarded("dir_check", _maybe_dir_check)
+        _guarded("auto_strip", _maybe_auto_strip)
         _stop.wait(CHECK_INTERVAL)
 
 
 def start() -> None:
     """Start the scheduler thread (idempotent)."""
     global _thread, _dir_cutoff, _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
-    global _auto_strip_task_id
+    global _dir_last_changed_count, _dir_last_enqueued_count, _auto_strip_task_id
     if _thread and _thread.is_alive():
         return
     _stop.clear()
@@ -234,7 +284,11 @@ def start() -> None:
     _dir_check_last_run = 0.0
     _dir_batch_task_ids = set()
     _dir_batch_cutoff = None
+    _dir_last_changed_count = None
+    _dir_last_enqueued_count = None
     _auto_strip_task_id = None
+    for key in _last_error:
+        _last_error[key] = None
     _thread = threading.Thread(target=_loop, name="scan-scheduler", daemon=True)
     _thread.start()
 

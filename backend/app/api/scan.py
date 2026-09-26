@@ -2,11 +2,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import auth, paths
+from .. import auth, paths, scheduler
 from ..scan import inventory
 from ..tasks import runner
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/scan/dir-watch-status")
+def dir_watch_status(_: str = Depends(auth.current_user)):
+    return scheduler.dir_watch_status()
 
 
 class ScanRequest(BaseModel):

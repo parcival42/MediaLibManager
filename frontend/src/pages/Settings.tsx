@@ -149,9 +149,26 @@ function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settin
   )
 }
 
+interface DirWatchStatus {
+  enabled: boolean
+  interval_minutes: number
+  cutoff: number | null
+  last_check_at: number | null
+  next_check_at: number | null
+  dirs_changed_last_check: number | null
+  tasks_enqueued_last_check: number | null
+  batch_in_flight: boolean
+  last_error: string | null
+}
+
 function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
   const { t } = useI18n()
   const enabled = Boolean(form.dir_watch_enabled)
+  const status = useQuery<DirWatchStatus>({
+    queryKey: ['dir-watch-status'],
+    queryFn: () => api<DirWatchStatus>('/api/scan/dir-watch-status'),
+    refetchInterval: 15000,
+  })
 
   return (
     <div className="flex flex-col gap-3 border-t border-line pt-4">
@@ -175,6 +192,34 @@ function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settin
         />
       </label>
       <p className="text-xs text-ink-3">{t('settings_dir_watch_hint')}</p>
+
+      {status.data && (
+        <div className="flex flex-col gap-1 rounded-lg border border-line bg-surface-3 p-3 text-xs text-ink-2">
+          <div>
+            {t('settings_dir_watch_last_check')}:{' '}
+            {status.data.last_check_at
+              ? new Date(status.data.last_check_at * 1000).toLocaleString()
+              : t('settings_dir_watch_never')}
+          </div>
+          {status.data.last_check_at && (
+            <div>
+              {t('settings_dir_watch_changed_count')}: {status.data.dirs_changed_last_check ?? 0}
+              {' · '}
+              {t('settings_dir_watch_enqueued_count')}: {status.data.tasks_enqueued_last_check ?? 0}
+            </div>
+          )}
+          {status.data.enabled && status.data.next_check_at && (
+            <div>
+              {t('settings_dir_watch_next_check')}: {new Date(status.data.next_check_at * 1000).toLocaleString()}
+            </div>
+          )}
+          {status.data.last_error && (
+            <div className="text-warn">
+              {t('settings_dir_watch_error')}: {status.data.last_error}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

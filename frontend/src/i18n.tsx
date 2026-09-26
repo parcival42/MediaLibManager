@@ -315,6 +315,12 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     de: 'Prüft nur Verzeichnis-Zeitstempel (billig) und scannt gezielt nur geänderte Verzeichnisse. Ersetzt nicht den vollen Scan oben.',
     en: 'Only checks directory timestamps (cheap) and scans just the changed directories. Does not replace the full scan above.',
   },
+  settings_dir_watch_last_check: { de: 'Zuletzt geprüft', en: 'Last checked' },
+  settings_dir_watch_never: { de: 'noch nicht gelaufen', en: 'not run yet' },
+  settings_dir_watch_changed_count: { de: 'Geänderte Verzeichnisse', en: 'Changed directories' },
+  settings_dir_watch_enqueued_count: { de: 'Ausgelöste Scans', en: 'Scans triggered' },
+  settings_dir_watch_next_check: { de: 'Nächste Prüfung', en: 'Next check' },
+  settings_dir_watch_error: { de: 'Fehler beim letzten Check', en: 'Error on last check' },
   settings_schedule_cleanup_enabled: {
     de: 'Nach dem Scan verwaiste Einträge bereinigen',
     en: 'Clean up stale entries after the scan',
