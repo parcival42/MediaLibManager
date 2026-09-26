@@ -48,6 +48,18 @@ interface ErrorFile {
   error: string | null
 }
 
+interface DirWatchStatus {
+  enabled: boolean
+  interval_minutes: number
+  cutoff: number | null
+  last_check_at: number | null
+  next_check_at: number | null
+  dirs_changed_last_check: number | null
+  tasks_enqueued_last_check: number | null
+  batch_in_flight: boolean
+  last_error: string | null
+}
+
 const ACTIVE = new Set(['queued', 'running'])
 
 const STATUS_STYLE: Record<string, string> = {
@@ -288,6 +300,50 @@ function EnrichmentBlock() {
   )
 }
 
+function DirWatchBlock() {
+  const { t } = useI18n()
+
+  // Directory-mtime pre-check (see backend/app/scheduler.py) -- deliberately
+  // creates no task row when nothing changed, so it needs its own status
+  // source instead of showing up in the queue/history below.
+  const { data } = useQuery<DirWatchStatus>({
+    queryKey: ['dir-watch-status'],
+    queryFn: () => api<DirWatchStatus>('/api/scan/dir-watch-status'),
+    refetchInterval: 15000,
+  })
+
+  if (!data?.enabled) return null
+
+  return (
+    <div className="rounded-2xl border border-line bg-surface-2 px-4 py-3">
+      <div className="text-sm font-medium text-ink-1">{t('settings_dir_watch_title')}</div>
+      <div className="mt-1.5 space-y-0.5 text-[11px] text-ink-3">
+        <div>
+          {t('settings_dir_watch_last_check')}:{' '}
+          {data.last_check_at ? new Date(data.last_check_at * 1000).toLocaleString() : t('settings_dir_watch_never')}
+        </div>
+        {data.last_check_at && (
+          <div>
+            {t('settings_dir_watch_changed_count')}: {data.dirs_changed_last_check ?? 0}
+            {' · '}
+            {t('settings_dir_watch_enqueued_count')}: {data.tasks_enqueued_last_check ?? 0}
+          </div>
+        )}
+        {data.next_check_at && (
+          <div>
+            {t('settings_dir_watch_next_check')}: {new Date(data.next_check_at * 1000).toLocaleString()}
+          </div>
+        )}
+      </div>
+      {data.last_error && (
+        <div className="mt-1.5 text-[11px] text-danger">
+          {t('settings_dir_watch_error')}: {data.last_error}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Detail({ label, value }: { label: string; value: unknown }) {
   return (
     <div>
@@ -323,6 +379,7 @@ export default function Tasks() {
 
       <div className="min-h-0 flex-1 space-y-5 overflow-auto pr-1">
         <EnrichmentBlock />
+        <DirWatchBlock />
 
         <section className="space-y-2.5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">

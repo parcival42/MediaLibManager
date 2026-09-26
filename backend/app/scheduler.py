@@ -170,7 +170,7 @@ def _poll_dir_batch() -> None:
 
 
 def _maybe_dir_check() -> None:
-    global _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
+    global _dir_cutoff, _dir_check_last_run, _dir_batch_task_ids, _dir_batch_cutoff
     global _dir_last_changed_count, _dir_last_enqueued_count
 
     if not config.get("dir_watch_enabled") or _dir_batch_task_ids:
