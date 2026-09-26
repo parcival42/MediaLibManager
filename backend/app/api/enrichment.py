@@ -1,5 +1,5 @@
 """Enrichment endpoints — global progress and the error list for the Tasks page."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth, db
 from ..enrich import worker
@@ -25,3 +25,11 @@ def enrichment_errors(_: str = Depends(auth.current_user)):
     ).fetchall()
     con.close()
     return [dict(r) for r in rows]
+
+
+@router.post("/enrichment/errors/{file_id}/retry")
+def retry_enrichment_error(file_id: int, _: str = Depends(auth.current_user)):
+    result = worker.retry_file(file_id)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="file not found")
+    return {"status": result}

@@ -113,6 +113,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   tasks_queue_empty: { de: 'Keine laufenden oder gequeueten Tasks.', en: 'No running or queued tasks.' },
   enrich_errors_label: { de: 'Fehler', en: 'Errors' },
   enrich_error_unknown: { de: 'Keine Fehlermeldung.', en: 'No error message.' },
+  enrich_retry: { de: 'Neu einlesen', en: 'Reprocess' },
   enrich_phase_0: { de: 'Metadaten', en: 'Metadata' },
   enrich_phase_1: { de: 'Hashing', en: 'Hashing' },
   enrich_phase_2: { de: 'MD5', en: 'MD5' },
@@ -348,6 +349,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   settings_field_task_retention: {
     de: 'Task-Historie aufbewahren (Tage)',
     en: 'Keep task history (days)',
+  },
+  settings_field_enrich_settle: {
+    de: 'Wartezeit vor Enrichment (Sekunden)',
+    en: 'Settle time before enrichment (seconds)',
   },
   settings_field_phash_threshold: { de: 'Bild-pHash-Schwellwert (Hamming)', en: 'Image pHash threshold (Hamming)' },
   settings_field_video_frame_threshold: { de: 'Video-Frame-Schwellwert (Hamming)', en: 'Video frame threshold (Hamming)' },

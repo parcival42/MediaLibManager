@@ -32,6 +32,8 @@ DEFAULTS = {
     "metadata_auto_strip_enabled": False,
     # --- Task history ---
     "task_history_retention_days": 30,  # finished task rows older than this get pruned
+    # --- Enrichment ---
+    "enrich_settle_seconds": 120,  # skip a freshly-changed file until its recorded mtime is this old
     # --- Duplicate detection (comparison-time only; changing these just needs a
     #     fresh duplicate scan, never re-enrichment) ---
     "phash_threshold":       8,      # Hamming distance for image pHash

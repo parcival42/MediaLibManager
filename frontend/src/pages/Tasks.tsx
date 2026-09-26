@@ -199,6 +199,7 @@ function TaskCard({ task }: { task: Task }) {
 
 function EnrichmentBlock() {
   const { t } = useI18n()
+  const qc = useQueryClient()
   const [errorsOpen, setErrorsOpen] = useState(false)
 
   // Continuous background worker (see backend/app/enrich/worker.py) — not part
@@ -213,6 +214,14 @@ function EnrichmentBlock() {
     queryKey: ['enrichment', 'errors'],
     queryFn: () => api<ErrorFile[]>('/api/enrichment/errors'),
     enabled: errorsOpen,
+  })
+
+  const retryMut = useMutation({
+    mutationFn: (fileId: number) => api(`/api/enrichment/errors/${fileId}/retry`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['enrichment', 'errors'] })
+      qc.invalidateQueries({ queryKey: ['enrichment', 'status'] })
+    },
   })
 
   if (!data || data.total === 0) return null
@@ -289,9 +298,22 @@ function EnrichmentBlock() {
       {errorsOpen && data.error > 0 && (
         <div className="max-h-72 space-y-1.5 overflow-auto border-t border-line px-4 py-3">
           {errors.data?.map((f) => (
-            <div key={f.id} className="rounded-lg border border-line bg-bg/60 px-3 py-2 text-xs">
-              <div className="truncate font-mono text-ink-2">{f.path}</div>
-              <div className="mt-0.5 text-danger">{f.error || t('enrich_error_unknown')}</div>
+            <div
+              key={f.id}
+              className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg/60 px-3 py-2 text-xs"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-ink-2">{f.path}</div>
+                <div className="mt-0.5 text-danger">{f.error || t('enrich_error_unknown')}</div>
+              </div>
+              <Button
+                variant="subtle"
+                size="sm"
+                onClick={() => retryMut.mutate(f.id)}
+                disabled={retryMut.isPending && retryMut.variables === f.id}
+              >
+                {t('enrich_retry')}
+              </Button>
             </div>
           ))}
         </div>

@@ -15,6 +15,11 @@ usable long before the expensive MD5 pass completes.
 The work state lives entirely in the ``files`` rows, so the worker resumes
 naturally after a restart. It pauses whenever a task is running (see
 ``tasks.runner``) to avoid touching files an action is modifying.
+
+``_claim_batch`` also holds back anything whose recorded ``mtime`` is younger
+than ``enrich_settle_seconds`` -- see that function's docstring for why a
+file caught mid-write by a scan needs a grace period before enrichment
+touches it.
 """
 import logging
 import os
@@ -24,6 +29,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, db, paths
+from ..scan import inventory
 from ..tasks import runner
 from . import images, tools, videos
 
@@ -126,12 +132,23 @@ def _process_one(row) -> None:
 
 
 def _claim_batch(limit: int) -> list:
+    """Skip files recorded as changed too recently: a file caught by a scan
+    while still mid-write (e.g. a large SMB copy) keeps advancing its real
+    mtime on disk well past whatever was stat-ed at scan time, and ffprobe
+    etc. would just fail against the still-incomplete content. Waiting until
+    the *recorded* mtime is old enough is a heuristic, not a guarantee (a
+    transfer slower than the settle window still gets one failed attempt),
+    but it is what stops the common case; the next full scan resets a
+    still-inconsistent file for another attempt regardless.
+    """
+    settle_seconds = max(0, int(config.get("enrich_settle_seconds")))
+    cutoff = time.time() - settle_seconds
     con = db.connect()
     rows = con.execute(
         "SELECT id, path, type, enrich_stage, duration, size FROM files "
-        "WHERE present = 1 AND enrich_status = 'pending' "
+        "WHERE present = 1 AND enrich_status = 'pending' AND mtime < ? "
         "ORDER BY enrich_stage ASC, path ASC LIMIT ?",
-        (limit,),
+        (cutoff, limit),
     ).fetchall()
     con.close()
     return rows
@@ -187,6 +204,47 @@ def stop() -> None:
     _stop.set()
     if _thread:
         _thread.join(timeout=5)
+
+
+def retry_file(file_id: int) -> str:
+    """Re-stat and re-queue a single file for full enrichment from stage 0.
+
+    Used by the "reprocess" action on an enrichment error. A plain reset of
+    the *existing* enrich_status would just repeat the same failure for a
+    file that was caught mid-write (see ``_claim_batch``'s settle window) --
+    this re-reads the file's current stat first, so if it has since finished
+    changing, the fresh size/mtime are what get recorded and enriched next,
+    same as the reconciliation scan does for any other changed file. A file
+    that no longer exists on disk is marked ``present = 0`` instead of being
+    re-queued. Returns ``"queued"``, ``"missing"``, or ``"not_found"``.
+    """
+    con = db.connect()
+    try:
+        row = con.execute("SELECT path FROM files WHERE id = ?", (file_id,)).fetchone()
+        if row is None:
+            return "not_found"
+        path = row["path"]
+
+        try:
+            st = os.stat(path)
+        except OSError:
+            con.execute("UPDATE files SET present = 0 WHERE id = ?", (file_id,))
+            con.commit()
+            return "missing"
+
+        con.execute(
+            "UPDATE files SET type = ?, size = ?, mtime = ?, st_dev = ?, st_ino = ?, "
+            "present = 1, enrich_stage = 0, enrich_status = 'pending', "
+            "md5 = NULL, phash = NULL, frame_hashes = NULL, frames_b64 = NULL, "
+            "edge_hashes = NULL, error = NULL, enriched_at = NULL, last_seen = ? "
+            "WHERE id = ?",
+            (inventory.classify(os.path.basename(path)), st.st_size, st.st_mtime,
+             st.st_dev, st.st_ino, time.time(), file_id),
+        )
+        con.commit()
+        return "queued"
+    finally:
+        con.close()
 
 
 def status() -> dict:
