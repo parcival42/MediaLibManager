@@ -19,11 +19,14 @@ serial queue still runs them one at a time.
 
 A second, independent mechanism (``dir_watch_*`` settings) runs a much cheaper
 pre-check between full scans: it stats only directories (see
-``scan.dir_check``), not files, and enqueues a scoped scan (the same
-``run_inventory_scan`` the manual "Scan" button uses) for just the
-directories that actually changed since ``_dir_cutoff``. Those tasks are
-tagged ``dir_watch: true`` -- deliberately *not* ``scheduled: true`` -- so
-they stay invisible to the full-scan due-check above.
+``scan.dir_check``), not files, and collects the ones that actually changed
+since ``_dir_cutoff`` into a *single* ``dir_watch: true`` task (deliberately
+*not* ``scheduled: true``, so it stays invisible to the full-scan due-check
+above) that scans them one after another via
+``inventory.run_inventory_scan_batch``. One task rather than one per changed
+directory means a busy tick (many directories changed at once) only pauses
+the enrichment worker for one task's lifetime instead of fragmenting it
+across as many pause/resume cycles as there are changed directories.
 
 The check fires on clock-aligned minute boundaries (like cron's ``*/N``),
 not "N minutes after whenever it last ran": with a 5-minute interval it runs
@@ -42,11 +45,11 @@ anything -- it simply waits for the next aligned minute, same as cron would.
 ``_dir_cutoff`` is a single timestamp, not a per-directory table: a
 directory's mtime only advances, so "mtime >= cutoff" is enough to know it
 changed since then, without remembering its previous value. It only advances
-past a batch's sweep-start time once every task in that batch finished as
-``done`` -- if any of them errored or got cancelled, the cutoff stays put so
-the next check re-covers the same ground (harmless: scoped scans are cheap
-and idempotent) rather than silently skipping a directory that was never
-actually reconciled. The cutoff is process-local and resets to "now" on every
+past a batch's sweep-start time once that batch's task finished as ``done``
+-- if it errored or got cancelled, the cutoff stays put so the next check
+re-covers the same directories (harmless: scoped scans are cheap and
+idempotent) rather than silently skipping one that was never actually
+reconciled. The cutoff is process-local and resets to "now" on every
 restart (matching the rest of the task system's "no resume" model) — the
 daily full scan is what catches anything missed across a restart.
 
@@ -59,17 +62,23 @@ Two more settings piggyback on this same loop:
   really gone. Queued unconditionally after the scan; cleanup re-verifies
   every row itself and has its own guard against mass-deleting on a bad
   mount, so it does not need to know whether the scan succeeded.
-- ``metadata_auto_strip_enabled`` periodically enqueues a ``metadata_strip``
-  task for whatever ``metadata.strip.auto_candidate_ids()`` currently
-  returns -- the same eligibility as the manual "Remove metadata" UI, minus
-  files that already failed the integrity check once (see that function).
+
+``metadata_auto_strip_enabled`` is *not* driven by this loop. Polling for
+strip candidates on a fixed timer meant it could fire in the middle of a
+large enrichment backlog, pausing the enrichment worker for a strip batch
+just to go back to enriching more of the same backlog seconds later. Instead
+the enrichment worker (``enrich.worker``) triggers it itself, right after it
+drains its pending work and would otherwise idle -- see that module's
+``_maybe_trigger_auto_strip``. It uses the same
+``metadata.strip.auto_candidate_ids()`` eligibility as the manual "Remove
+metadata" UI, minus files that already failed the integrity check once.
 
 The dir-watch pre-check deliberately never creates a task row when nothing
 changed (that's the whole point -- most ticks do nothing), which makes it
 invisible by default. ``dir_watch_status()`` exposes the process-local state
 behind it (last run, what that run found, any exception) so the UI can show
 something without spamming the task history with empty runs. Each of the
-four checks in ``_loop()`` is wrapped separately (``_guarded``) so one
+three checks in ``_loop()`` is wrapped separately (``_guarded``) so one
 throwing does not also skip the others for that tick, and so the exception
 lands in ``_last_error`` under its own name instead of one shared, anonymous
 "something failed" log line.
@@ -82,7 +91,6 @@ from datetime import datetime, timedelta
 
 from . import config, db, paths
 from .maintenance import cleanup
-from .metadata import strip
 from .scan import dir_check, inventory
 from .tasks import runner
 
@@ -95,17 +103,14 @@ _stop = threading.Event()
 _dir_cutoff = 0.0
 _dir_check_last_run = 0.0            # display only
 _dir_check_last_slot: int | None = None  # absolute minute id; de-dupes within one aligned minute
-_dir_batch_task_ids: set[str] = set()
+_dir_batch_task_id: str | None = None
 _dir_batch_cutoff: float | None = None
 _dir_last_changed_count: int | None = None
 _dir_last_enqueued_count: int | None = None
 
-# Auto metadata-strip state (process-local, reset in start()).
-_auto_strip_task_id: str | None = None
-
 # Per-check last exception, keyed by check name (process-local, reset in start()).
 _last_error: dict[str, str | None] = {
-    "trigger": None, "dir_batch": None, "dir_check": None, "auto_strip": None,
+    "trigger": None, "dir_batch": None, "dir_check": None,
 }
 
 
@@ -166,27 +171,23 @@ def _maybe_trigger() -> None:
 
 
 def _poll_dir_batch() -> None:
-    """Resolve the previous dir-watch batch, if any, before starting another.
+    """Resolve the previous dir-watch batch task, if any, before starting another.
 
-    Cutoff only advances once every task in the batch is confirmed 'done' --
-    see the module docstring for why a partial failure must leave it in place.
+    Cutoff only advances once that task is confirmed 'done' -- see the module
+    docstring for why a partial failure must leave it in place.
     """
-    global _dir_cutoff, _dir_batch_task_ids, _dir_batch_cutoff
-    if not _dir_batch_task_ids:
+    global _dir_cutoff, _dir_batch_task_id, _dir_batch_cutoff
+    if not _dir_batch_task_id:
         return
     con = db.connect()
-    placeholders = ",".join("?" * len(_dir_batch_task_ids))
-    rows = con.execute(
-        f"SELECT status FROM tasks WHERE id IN ({placeholders})",
-        tuple(_dir_batch_task_ids),
-    ).fetchall()
+    row = con.execute("SELECT status FROM tasks WHERE id = ?", (_dir_batch_task_id,)).fetchone()
     con.close()
-    statuses = [r["status"] for r in rows]
-    if any(s in ("queued", "running") for s in statuses):
+    status = row["status"] if row else None
+    if status in ("queued", "running"):
         return  # still in flight
-    if statuses and all(s == "done" for s in statuses):
+    if status == "done":
         _dir_cutoff = _dir_batch_cutoff
-    _dir_batch_task_ids = set()
+    _dir_batch_task_id = None
     _dir_batch_cutoff = None
 
 
@@ -201,10 +202,10 @@ def _next_aligned_epoch(interval_minutes: int, now: float | None = None) -> floa
 
 def _maybe_dir_check() -> None:
     global _dir_cutoff, _dir_check_last_run, _dir_check_last_slot
-    global _dir_batch_task_ids, _dir_batch_cutoff
+    global _dir_batch_task_id, _dir_batch_cutoff
     global _dir_last_changed_count, _dir_last_enqueued_count
 
-    if not config.get("dir_watch_enabled") or _dir_batch_task_ids:
+    if not config.get("dir_watch_enabled") or _dir_batch_task_id:
         return
 
     interval = max(1, int(config.get("dir_watch_interval_minutes")))
@@ -227,14 +228,15 @@ def _maybe_dir_check() -> None:
         _dir_cutoff = _dir_check_last_run
         return
 
-    ids = set()
-    for scope in changed:
-        task_id = runner.create_task("scan", {"directory": str(scope), "dir_watch": True})
-        runner.enqueue(task_id, lambda ctx, scope=scope: inventory.run_inventory_scan(scope, ctx))
-        ids.add(task_id)
-    _dir_batch_task_ids = ids
+    # One task for every changed directory in this tick, not one task each --
+    # see the module docstring for why that matters to the enrichment worker.
+    task_id = runner.create_task(
+        "scan", {"directories": [str(s) for s in changed], "dir_watch": True},
+    )
+    runner.enqueue(task_id, lambda ctx: inventory.run_inventory_scan_batch(changed, ctx))
+    _dir_batch_task_id = task_id
     _dir_batch_cutoff = _dir_check_last_run
-    _dir_last_enqueued_count = len(ids)
+    _dir_last_enqueued_count = len(changed)
 
 
 def dir_watch_status() -> dict:
@@ -249,36 +251,9 @@ def dir_watch_status() -> dict:
         "next_check_at": _next_aligned_epoch(interval_minutes),
         "dirs_changed_last_check": _dir_last_changed_count,
         "tasks_enqueued_last_check": _dir_last_enqueued_count,
-        "batch_in_flight": bool(_dir_batch_task_ids),
+        "batch_in_flight": bool(_dir_batch_task_id),
         "last_error": _last_error["dir_check"],
     }
-
-
-def _maybe_auto_strip() -> None:
-    """Keep at most one auto-strip batch in flight; see the module docstring
-    for why files that already failed once are excluded from it."""
-    global _auto_strip_task_id
-
-    if not config.get("metadata_auto_strip_enabled"):
-        return
-    if _auto_strip_task_id is not None:
-        con = db.connect()
-        row = con.execute(
-            "SELECT status FROM tasks WHERE id = ?", (_auto_strip_task_id,)
-        ).fetchone()
-        con.close()
-        if row and row["status"] in ("queued", "running"):
-            return
-        _auto_strip_task_id = None
-    if runner.any_task_active():
-        return
-
-    ids = strip.auto_candidate_ids()
-    if not ids:
-        return
-    task_id = runner.create_task("metadata_strip", {"count": len(ids), "auto": True})
-    runner.enqueue(task_id, lambda ctx: strip.apply_strip(ids, ctx))
-    _auto_strip_task_id = task_id
 
 
 def _guarded(name: str, fn) -> None:
@@ -303,7 +278,6 @@ def _loop() -> None:
         _guarded("trigger", _maybe_trigger)
         _guarded("dir_batch", _poll_dir_batch)
         _guarded("dir_check", _maybe_dir_check)
-        _guarded("auto_strip", _maybe_auto_strip)
         # Re-align to the wall clock instead of waiting a fixed 60s
         # from whenever the checks above finished: their own runtime (DB
         # connections, a tasks-table scan) would otherwise make the tick phase
@@ -316,19 +290,18 @@ def _loop() -> None:
 def start() -> None:
     """Start the scheduler thread (idempotent)."""
     global _thread, _dir_cutoff, _dir_check_last_run, _dir_check_last_slot
-    global _dir_batch_task_ids, _dir_batch_cutoff
-    global _dir_last_changed_count, _dir_last_enqueued_count, _auto_strip_task_id
+    global _dir_batch_task_id, _dir_batch_cutoff
+    global _dir_last_changed_count, _dir_last_enqueued_count
     if _thread and _thread.is_alive():
         return
     _stop.clear()
     _dir_cutoff = time.time()
     _dir_check_last_run = 0.0
     _dir_check_last_slot = None
-    _dir_batch_task_ids = set()
+    _dir_batch_task_id = None
     _dir_batch_cutoff = None
     _dir_last_changed_count = None
     _dir_last_enqueued_count = None
-    _auto_strip_task_id = None
     for key in _last_error:
         _last_error[key] = None
     _thread = threading.Thread(target=_loop, name="scan-scheduler", daemon=True)

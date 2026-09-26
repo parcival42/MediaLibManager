@@ -38,7 +38,26 @@ def classify(name: str) -> str:
 def run_inventory_scan(scope: Path, ctx=None) -> dict:
     """Scan ``scope`` recursively and reconcile it against the database.
 
-    ``ctx`` is an optional task context exposing ``log`` and ``progress``.
+    ``ctx`` is an optional task context exposing ``log`` and ``progress``. A
+    thin wrapper around ``run_inventory_scan_batch`` for the single-directory
+    case (manual "Scan" button, the daily full scan).
+    """
+    return run_inventory_scan_batch([scope], ctx)
+
+
+def run_inventory_scan_batch(scopes: list[Path], ctx=None) -> dict:
+    """Scan each of ``scopes`` in turn, within one task.
+
+    Each scope gets its own filesystem walk and its own reconciliation
+    transaction (committed independently, right after that scope's walk) --
+    a cancellation or crash partway through the list leaves already-committed
+    scopes reconciled instead of rolling everything back. Used to fold the
+    dir-watch pre-check's per-directory scans into a single task (rather than
+    one task per changed directory) as well as the single-scope callers above.
+
+    Progress is split evenly across the scopes, with each scope's own walk
+    counted as the first 40% of its share (matching the single-scope 0/40/100
+    milestones) and its reconciliation as the rest.
     """
     def log(msg: str) -> None:
         if ctx:
@@ -52,6 +71,28 @@ def run_inventory_scan(scope: Path, ctx=None) -> dict:
         if ctx:
             ctx.raise_if_cancelled()
 
+    totals = {"found": 0, "new": 0, "changed": 0, "renamed": 0, "removed": 0, "unchanged": 0}
+    n = len(scopes)
+    if n == 0:
+        return totals
+    for i, scope in enumerate(scopes):
+        check_cancelled()
+        share_walk_done = 100 * (i + 0.4) / n
+        share_done = 100 * (i + 1) / n
+
+        summary = _scan_one_scope(scope, log, check_cancelled,
+                                   lambda: progress(share_walk_done))
+        for k, v in summary.items():
+            totals[k] += v
+        progress(share_done)
+
+    log(f"Done: {totals}")
+    return totals
+
+
+def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
+    """Walk and reconcile a single ``scope`` against the database. See
+    ``run_inventory_scan_batch`` for the calling convention."""
     scope = scope.resolve()
     scope_str = str(scope)
     log(f"Scanning {scope_str}")
@@ -68,7 +109,7 @@ def run_inventory_scan(scope: Path, ctx=None) -> dict:
                 continue
         if len(current) % 2000 == 0 and current:
             log(f"Discovered {len(current)} files…")
-    progress(40)
+    mark_walk_done()
     log(f"Found {len(current)} files on disk.")
 
     # Last chance to bail before any DB writes; the reconciliation below commits
@@ -149,7 +190,6 @@ def run_inventory_scan(scope: Path, ctx=None) -> dict:
 
     con.commit()
     con.close()
-    progress(100)
 
     summary = {
         "found": len(current),
@@ -159,5 +199,5 @@ def run_inventory_scan(scope: Path, ctx=None) -> dict:
         "removed": n_removed,
         "unchanged": n_unchanged,
     }
-    log(f"Done: {summary}")
+    log(f"Scope done: {summary}")
     return summary

@@ -206,7 +206,7 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
                 continue
 
             try:
-                backup_path = tools.strip_title_comment(path)
+                backup_path = tools.strip_title_comment(path, f["size"])
             except tools.ToolError as exc:
                 errors += 1
                 ctx.log(f"ERROR stripping {os.path.basename(path)}: {exc}")

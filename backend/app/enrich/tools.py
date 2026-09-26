@@ -19,6 +19,23 @@ PROBE_TIMEOUT = 60
 FRAME_TIMEOUT = 120
 BLOCK_TIMEOUT = 180  # decoding a multi-second edge block costs more than a seek
 
+# exiftool strips Title/Comment "in place" by writing a whole new file and
+# swapping it in (see strip_title_comment) -- unlike the read-only calls
+# above, its cost scales with the file's *size*, not just seek/decode time.
+# A flat PROBE_TIMEOUT-sized budget is fine for a small clip but times out on
+# a large 4K file well before exiftool actually gets stuck. Floor is a
+# conservative throughput for the media share; STRIP_TIMEOUT_BASE covers
+# process startup plus the ffprobe integrity re-check that follows in the
+# same task.
+STRIP_MIN_THROUGHPUT = 60 * 1024 * 1024  # bytes/sec
+STRIP_TIMEOUT_BASE = 60
+
+
+def strip_timeout(size: int | None) -> int:
+    if not size:
+        return STRIP_TIMEOUT_BASE + 600
+    return STRIP_TIMEOUT_BASE + int(size / STRIP_MIN_THROUGHPUT)
+
 # Frame sample positions (fraction of duration) for video pHashes, matching the
 # scheme reused by the dedup and metadata-integrity logic. Fixed on purpose:
 # changing the count or positions would invalidate the whole library's stored
@@ -172,20 +189,24 @@ def read_title_comment(paths: list[str]) -> dict[str, list[dict]]:
     return result
 
 
-def strip_title_comment(path: str) -> str:
+def strip_title_comment(path: str, size: int | None = None) -> str:
     """Remove the Title/Comment tags via exiftool, in place.
 
     Deliberately omits ``-overwrite_original``: exiftool then leaves its own
     backup copy at ``<path>_original`` (same directory, same filesystem)
     before modifying ``path``, so the caller can verify integrity and decide
     whether to discard or restore from it. Returns the backup path.
+
+    ``size`` (the file's byte size, when known) sizes the timeout -- see
+    ``strip_timeout``, since this rewrites the whole file rather than just
+    reading it.
     """
     backup = f"{path}_original"
     if os.path.exists(backup):
         os.remove(backup)  # stale leftover from a crashed earlier run
     _run(
         ["exiftool", "-P", "-m", "-api", "LargeFileSupport=1", "-Title=", "-Comment=", path],
-        PROBE_TIMEOUT,
+        strip_timeout(size),
     )
     return backup
 

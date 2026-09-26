@@ -20,6 +20,14 @@ naturally after a restart. It pauses whenever a task is running (see
 than ``enrich_settle_seconds`` -- see that function's docstring for why a
 file caught mid-write by a scan needs a grace period before enrichment
 touches it.
+
+This worker also owns triggering ``metadata_auto_strip_enabled`` (see
+``_maybe_trigger_auto_strip``): rather than a separate timer polling for
+strip candidates on its own schedule -- which could fire mid-backlog and
+pause this worker for a strip batch only to resume the same backlog seconds
+later -- it is checked right here, only when ``_claim_batch`` comes back
+empty and this worker was about to idle anyway. A strip task can then run
+without costing this worker any pass it wouldn't have paused for regardless.
 """
 import logging
 import os
@@ -29,6 +37,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, db, paths
+from ..metadata import strip
 from ..scan import inventory
 from ..tasks import runner
 from . import images, tools, videos
@@ -48,6 +57,10 @@ ERROR_MAX = 500    # truncate stored error messages
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 _current_file: str | None = None
+
+# Auto metadata-strip state (process-local, reset in start()). See
+# ``_maybe_trigger_auto_strip``.
+_auto_strip_task_id: str | None = None
 
 # Per-stage completion samples for the phase ETA, each entry (finished_at, size).
 # Stages 0/1 estimate remaining time by file count, stage 2 (MD5) by bytes —
@@ -154,6 +167,39 @@ def _claim_batch(limit: int) -> list:
     return rows
 
 
+def _maybe_trigger_auto_strip() -> None:
+    """Enqueue a ``metadata_strip`` task for whatever is currently eligible,
+    if unattended stripping is enabled and no such task is already in flight.
+
+    Called only when this worker has just found no more pending enrichment
+    work -- see the module docstring for why that timing (rather than a
+    fixed-interval timer) is deliberate. Keeping at most one auto-strip batch
+    in flight mirrors the manual "Remove metadata" UI's own eligibility via
+    ``strip.auto_candidate_ids()``, which already excludes files that failed
+    the integrity check once (retrying them would just repeat the failure).
+    """
+    global _auto_strip_task_id
+
+    if not config.get("metadata_auto_strip_enabled"):
+        return
+    if _auto_strip_task_id is not None:
+        con = db.connect()
+        row = con.execute(
+            "SELECT status FROM tasks WHERE id = ?", (_auto_strip_task_id,)
+        ).fetchone()
+        con.close()
+        if row and row["status"] in ("queued", "running"):
+            return
+        _auto_strip_task_id = None
+
+    ids = strip.auto_candidate_ids()
+    if not ids:
+        return
+    task_id = runner.create_task("metadata_strip", {"count": len(ids), "auto": True})
+    runner.enqueue(task_id, lambda ctx: strip.apply_strip(ids, ctx))
+    _auto_strip_task_id = task_id
+
+
 def _loop() -> None:
     global _current_file
     while not _stop.is_set():
@@ -168,6 +214,7 @@ def _loop() -> None:
             batch = _claim_batch(_batch_size(worker_count))
             if not batch:
                 _current_file = None
+                _maybe_trigger_auto_strip()
                 _stop.wait(IDLE_SLEEP)
                 continue
 
@@ -191,10 +238,11 @@ def _loop() -> None:
 
 def start() -> None:
     """Start the worker thread (idempotent)."""
-    global _thread
+    global _thread, _auto_strip_task_id
     if _thread and _thread.is_alive():
         return
     _stop.clear()
+    _auto_strip_task_id = None
     _thread = threading.Thread(target=_loop, name="enrich-worker", daemon=True)
     _thread.start()
 
