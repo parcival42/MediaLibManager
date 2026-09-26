@@ -141,6 +141,36 @@ function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settin
   )
 }
 
+function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
+  const { t } = useI18n()
+  const enabled = Boolean(form.dir_watch_enabled)
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-line pt-4">
+      <span className="text-xs font-medium text-ink-2">{t('settings_dir_watch_title')}</span>
+      <label className="flex items-center gap-2 text-sm text-ink-1">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setForm({ ...form, dir_watch_enabled: e.target.checked })}
+        />
+        {t('settings_dir_watch_enabled')}
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-ink-2">{t('settings_dir_watch_interval')}</span>
+        <Input
+          type="number"
+          min={1}
+          className="w-32"
+          value={(form.dir_watch_interval_minutes as number) ?? 5}
+          onChange={(e) => setForm({ ...form, dir_watch_interval_minutes: e.target.value })}
+        />
+      </label>
+      <p className="text-xs text-ink-3">{t('settings_dir_watch_hint')}</p>
+    </div>
+  )
+}
+
 const DUPLICATE_FIELDS: { key: string; labelKey: string }[] = [
   { key: 'phash_threshold', labelKey: 'settings_field_phash_threshold' },
   { key: 'color_threshold', labelKey: 'settings_field_color_threshold' },
@@ -220,6 +250,8 @@ export default function SettingsPage() {
     payload.scan_schedule_enabled = Boolean(form.scan_schedule_enabled)
     payload.scan_schedule_time = String(form.scan_schedule_time ?? '03:00')
     payload.scan_schedule_days = Array.isArray(form.scan_schedule_days) ? form.scan_schedule_days : []
+    payload.dir_watch_enabled = Boolean(form.dir_watch_enabled)
+    payload.dir_watch_interval_minutes = Number(form.dir_watch_interval_minutes ?? 5)
     const updated = await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) })
     setForm(updated)
     setSaved(true)
@@ -263,6 +295,7 @@ export default function SettingsPage() {
               saved={saved}
             >
               <ScheduleFields form={form} setForm={setForm} />
+              <DirWatchFields form={form} setForm={setForm} />
             </FieldSection>
           )}
           {section === 'duplicates' && (

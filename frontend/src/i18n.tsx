@@ -309,6 +309,16 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     de: 'Zeiten in deiner Zeitzone (Browser); intern als UTC gespeichert.',
     en: 'Times in your timezone (browser); stored internally as UTC.',
   },
+  settings_dir_watch_title: { de: 'Verzeichnis-Check', en: 'Directory check' },
+  settings_dir_watch_enabled: {
+    de: 'Verzeichnisse zwischen vollen Scans auf Änderungen prüfen',
+    en: 'Check directories for changes between full scans',
+  },
+  settings_dir_watch_interval: { de: 'Intervall (Minuten)', en: 'Interval (minutes)' },
+  settings_dir_watch_hint: {
+    de: 'Prüft nur Verzeichnis-Zeitstempel (billig) und scannt gezielt nur geänderte Verzeichnisse. Ersetzt nicht den vollen Scan oben.',
+    en: 'Only checks directory timestamps (cheap) and scans just the changed directories. Does not replace the full scan above.',
+  },
   day_mon: { de: 'Mo', en: 'Mon' },
   day_tue: { de: 'Di', en: 'Tue' },
   day_wed: { de: 'Mi', en: 'Wed' },

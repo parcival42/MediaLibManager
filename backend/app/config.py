@@ -12,6 +12,9 @@ DEFAULTS = {
     "scan_schedule_enabled": False,
     "scan_schedule_time":    "03:00",        # HH:MM, server-local time
     "scan_schedule_days":    [0, 1, 2, 3, 4, 5, 6],  # Mon=0..Sun=6; all 7 = daily
+    # --- Directory-mtime fast path (cheap pre-check between full scans) ---
+    "dir_watch_enabled":          False,
+    "dir_watch_interval_minutes": 5,
     # --- Duplicate detection (comparison-time only; changing these just needs a
     #     fresh duplicate scan, never re-enrichment) ---
     "phash_threshold":       8,      # Hamming distance for image pHash
