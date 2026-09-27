@@ -207,7 +207,7 @@ def delete_assignment(assignment_id: int, _: str = Depends(auth.current_user)):
 
 
 @router.post("/preview")
-def preview_rename(directory: str | None = None, _: str = Depends(auth.current_user)):
+def preview_rename(directory: str | None = None, force: bool = False, _: str = Depends(auth.current_user)):
     try:
         scope = paths.resolve_within_root(directory)
     except ValueError:
@@ -216,14 +216,32 @@ def preview_rename(directory: str | None = None, _: str = Depends(auth.current_u
         raise HTTPException(status_code=404, detail="directory not found")
     directory = str(scope) if scope != paths.media_root() else None
 
-    # The UI starts a new preview on every scope change and after every apply,
-    # so a finished one is done being useful the moment the next is created —
-    # without this, preview runs would otherwise fill up the Tasks history
-    # and push real scans/renames off its first page.
+    # `force=False` (page open / scope switch) reuses a recent-enough preview
+    # for this scope instead of recomputing — see engine.find_recent_preview.
+    # `force=True` (the Refresh button) always recomputes and, since the user
+    # asked Refresh to fully discard the cache, drops every scope's cached
+    # pointer too — not just this one's.
+    if not force:
+        recent = engine.find_recent_preview(directory)
+        if recent:
+            return {"task_id": recent}
+    else:
+        engine.invalidate_recent_previews()
+
+    # A finished preview task is done being useful the moment a new one is
+    # created for the same scope — without this, preview runs would otherwise
+    # fill up the Tasks history and push real scans/renames off its first
+    # page. Rows a cache entry still points at (a different scope's) are
+    # excluded, or a page load that hits that cache would be handed a task id
+    # whose row just got deleted.
+    keep_ids = engine.recent_preview_task_ids()
+    sql = "DELETE FROM tasks WHERE type = 'rename_preview' AND status NOT IN ('queued', 'running')"
+    params: list = []
+    if keep_ids:
+        sql += f" AND id NOT IN ({','.join('?' * len(keep_ids))})"
+        params = list(keep_ids)
     con = db.connect()
-    con.execute(
-        "DELETE FROM tasks WHERE type = 'rename_preview' AND status NOT IN ('queued', 'running')"
-    )
+    con.execute(sql, params)
     con.commit()
     con.close()
 

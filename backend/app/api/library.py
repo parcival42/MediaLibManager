@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .. import auth, db, paths
+from ..rename import engine as rename_engine
 
 router = APIRouter(prefix="/api")
 
@@ -158,6 +159,9 @@ def rename_file(file_id: int, body: RenameIn, _: str = Depends(auth.current_user
         con.close()
         raise HTTPException(status_code=409, detail=str(exc))
     con.close()
+    # This page's own rename preview refreshes itself after this call, but a
+    # cached preview for another scope wouldn't otherwise notice this rename.
+    rename_engine.invalidate_recent_previews()
     return {"path": str(new_path), "filename": new_path.name}
 
 

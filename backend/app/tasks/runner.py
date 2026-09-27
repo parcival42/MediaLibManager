@@ -46,6 +46,22 @@ _cancel_lock = threading.Lock()
 _cancel_requested: set[str] = set()
 _running_task_id: str | None = None
 
+# Task type, keyed by id, looked up (and popped) once the task finishes — lets
+# _run_one act on what kind of task just completed without a DB round-trip.
+_task_types: dict[str, str] = {}
+
+# Bumped whenever a 'scan' task finishes successfully. Other modules (e.g. the
+# rename preview cache) use this as a cheap "has the file inventory possibly
+# changed" signal instead of subscribing to scan events directly. Written only
+# from the single worker thread, read from request-handling threads — a
+# plain int, no lock needed (worst case a reader sees last generation's value
+# one increment late, which just costs one extra recompute).
+_scan_generation = 0
+
+
+def scan_generation() -> int:
+    return _scan_generation
+
 
 def any_task_active() -> bool:
     return not _idle.is_set()
@@ -93,6 +109,7 @@ class TaskContext:
 
 def create_task(task_type: str, params: dict) -> str:
     task_id = uuid.uuid4().hex
+    _task_types[task_id] = task_type
     con = db.connect()
     con.execute(
         "INSERT INTO tasks(id, type, status, params, progress, created_at) "
@@ -167,7 +184,9 @@ def _prune_history() -> None:
 
 
 def _run_one(task_id: str, fn) -> None:
-    global _running_task_id
+    global _running_task_id, _scan_generation
+
+    task_type = _task_types.pop(task_id, None)
 
     # A task cancelled while still waiting in the queue: drop it without running.
     with _cancel_lock:
@@ -204,6 +223,12 @@ def _run_one(task_id: str, fn) -> None:
         ctx.log(f"ERROR: {exc}")
         _update(task_id, status="error", ended_at=time.time())
     finally:
+        # Bumped on any scan that actually started, done/error/cancelled alike
+        # -- even a cancelled or failed scan may already have inserted or
+        # flagged files, so a consumer relying on this (e.g. the rename
+        # preview cache) shouldn't treat the inventory as unchanged.
+        if task_type == "scan":
+            _scan_generation += 1
         with _cancel_lock:
             _cancel_requested.discard(task_id)
             _running_task_id = None

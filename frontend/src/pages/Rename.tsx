@@ -46,6 +46,7 @@ function useTaskPolling<R = unknown>(taskId: string | null, onDone: () => void) 
     queryFn: () => api<Task<R>>(`/api/tasks/${taskId}`),
     enabled: !!taskId,
     refetchInterval: (query) => {
+      if (query.state.error) return false
       const s = query.state.data?.status
       return s && s !== 'running' && s !== 'queued' ? false : 800
     },
@@ -102,10 +103,13 @@ export default function Rename() {
   const [previewTaskId, setPreviewTaskId] = useState<string | null>(null)
   const previewTaskIdRef = useRef<string | null>(null)
   const startPreviewMut = useMutation({
-    mutationFn: (dir: string | null) =>
-      api<{ task_id: string }>(`/api/rename/preview${dir ? `?directory=${encodeURIComponent(dir)}` : ''}`, {
-        method: 'POST',
-      }),
+    mutationFn: ({ dir, force }: { dir: string | null; force: boolean }) => {
+      const params = new URLSearchParams()
+      if (dir) params.set('directory', dir)
+      if (force) params.set('force', 'true')
+      const qs = params.toString()
+      return api<{ task_id: string }>(`/api/rename/preview${qs ? `?${qs}` : ''}`, { method: 'POST' })
+    },
   })
   const previewTask = useTaskPolling(previewTaskId, () => {
     setSelected(new Set())
@@ -121,21 +125,31 @@ export default function Rename() {
   const cancelPreviewTask = (taskId: string) => {
     api(`/api/tasks/${taskId}/cancel`, { method: 'POST' }).catch(() => {})
   }
-  // A scope change or apply starts a fresh preview — the old one is no longer
-  // wanted by anything, but left running it would keep enrichment paused and
-  // block real tasks behind it for no reason.
-  const refreshPreview = () => {
+  // Page open / scope switch (force=false) may reuse a recent-enough cached
+  // preview server-side instead of recomputing (see backend's
+  // engine.find_recent_preview) — opening the Rename page repeatedly on an
+  // unchanged library shouldn't re-scan every file every time. The Refresh
+  // button and the apply/manual-rename success paths pass force=true since a
+  // stale answer there would be actively wrong, not just unnecessary work.
+  // Either way, an old in-flight preview that's being replaced gets
+  // cancelled — left running it would keep enrichment paused and block real
+  // tasks behind it for no reason.
+  const startPreview = (force: boolean) => {
     const previous = previewTaskIdRef.current
-    startPreviewMut.mutate(scope, {
-      onSuccess: (d) => {
-        previewTaskIdRef.current = d.task_id
-        setPreviewTaskId(d.task_id)
+    startPreviewMut.mutate(
+      { dir: scope, force },
+      {
+        onSuccess: (d) => {
+          previewTaskIdRef.current = d.task_id
+          setPreviewTaskId(d.task_id)
+        },
       },
-    })
+    )
     if (previous) cancelPreviewTask(previous)
   }
+  const refreshPreview = () => startPreview(true)
   useEffect(() => {
-    refreshPreview()
+    startPreview(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
   useEffect(() => {
@@ -144,7 +158,8 @@ export default function Rename() {
     }
   }, [])
 
-  const previewStarting = startPreviewMut.isPending || (!!previewTaskId && previewStatus === undefined)
+  const previewStarting =
+    startPreviewMut.isPending || (!!previewTaskId && previewStatus === undefined && !previewTask.isError)
   const previewBusy =
     previewStarting ||
     previewStatus === 'queued' ||
@@ -152,6 +167,7 @@ export default function Rename() {
     (previewStatus === 'done' && previewResultQuery.isLoading)
   const previewFailed =
     startPreviewMut.isError ||
+    previewTask.isError ||
     previewStatus === 'error' ||
     previewStatus === 'cancelled' ||
     previewStatus === 'interrupted' ||

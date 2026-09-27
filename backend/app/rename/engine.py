@@ -7,16 +7,27 @@ feedback. ``preview``'s full result (every proposed rename) is kept out of the
 history list, and a few thousand renames there would bloat it badly — and is
 instead cached in ``_preview_cache`` here, fetched once via
 ``get_cached_preview``.
+
+``find_recent_preview`` layers a second, short-lived cache on top: opening the
+Rename page (or switching scope) recomputes nothing if a preview for that
+same scope was already computed recently and nothing that could change its
+answer has happened since — see its docstring for the exact rule.
 """
 import json
 import os
 import sqlite3
+import threading
 import time
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
 from .. import db
+from ..tasks import runner
 from . import rules
+
+# Guards both caches below: the worker thread writes them while a preview
+# computes, request-handling threads read (and evict from) them concurrently.
+_preview_lock = threading.Lock()
 
 # Full preview payloads, keyed by task id — kept out of the tasks table (see
 # module docstring). Bounded to a handful of entries; nothing needs more than
@@ -26,13 +37,95 @@ _preview_cache: "OrderedDict[str, dict]" = OrderedDict()
 
 
 def get_cached_preview(task_id: str) -> dict | None:
-    return _preview_cache.get(task_id)
+    with _preview_lock:
+        return _preview_cache.get(task_id)
 
 
 def _cache_preview(task_id: str, result: dict) -> None:
-    _preview_cache[task_id] = result
-    while len(_preview_cache) > _MAX_CACHED_PREVIEWS:
-        _preview_cache.popitem(last=False)
+    with _preview_lock:
+        _preview_cache[task_id] = result
+        while len(_preview_cache) > _MAX_CACHED_PREVIEWS:
+            _preview_cache.popitem(last=False)
+
+
+# One entry per scope (``None`` = whole library) recording the most recent
+# preview computed for it, so a caller that doesn't need a guaranteed-fresh
+# answer can be handed that task id instead of triggering a full recompute.
+_RECENT_PREVIEW_TTL = 3600  # seconds
+_recent_preview: dict[str | None, dict] = {}
+
+
+def find_recent_preview(directory: str | None) -> str | None:
+    """Return a still-valid task id for ``directory``'s last preview, or
+    ``None`` if there isn't one.
+
+    Valid means: computed less than ``_RECENT_PREVIEW_TTL`` ago, and no scan
+    has finished since (``runner.scan_generation()`` unchanged) — a scan is
+    the only thing that changes *which files exist*. Rule/filter/assignment
+    edits change the answer too but aren't tracked here — the user accepted
+    relying on the Refresh button (a forced recompute, see ``force`` in
+    ``api/rename.py``) after editing those instead of a third trigger here.
+    """
+    with _preview_lock:
+        entry = _recent_preview.get(directory)
+        if not entry:
+            return None
+        if time.time() - entry["computed_at"] > _RECENT_PREVIEW_TTL:
+            return None
+        if entry["generation"] != runner.scan_generation():
+            return None
+        task_id = entry["task_id"]
+        if task_id not in _preview_cache:
+            # Evicted from the small full-result cache (or the process
+            # restarted) — the entry is unusable, so don't keep offering it.
+            _recent_preview.pop(directory, None)
+            return None
+
+    # Checked against the DB, outside the lock: the in-memory pointer can
+    # still be stale in ways none of the checks above catch — the task was
+    # remembered right before a race with a cancel landed, or its own final
+    # status update failed. Only a row that actually finished 'done' is safe
+    # to hand back as if it were a fresh preview.
+    con = db.connect()
+    try:
+        row = con.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    finally:
+        con.close()
+    if not row or row["status"] != "done":
+        with _preview_lock:
+            if _recent_preview.get(directory, {}).get("task_id") == task_id:
+                _recent_preview.pop(directory, None)
+        return None
+
+    with _preview_lock:
+        _preview_cache.move_to_end(task_id)  # keep it from being the next eviction
+    return task_id
+
+
+def _remember_recent_preview(directory: str | None, task_id: str) -> None:
+    with _preview_lock:
+        _recent_preview[directory] = {
+            "task_id": task_id,
+            "computed_at": time.time(),
+            "generation": runner.scan_generation(),
+        }
+
+
+def recent_preview_task_ids() -> set[str]:
+    """Task ids currently referenced by ``_recent_preview``, across all scopes
+    — the history cleanup in ``api/rename.py`` must not delete these rows out
+    from under a cache entry that still points at them."""
+    with _preview_lock:
+        return {entry["task_id"] for entry in _recent_preview.values()}
+
+
+def invalidate_recent_previews() -> None:
+    """Discard every cached scope's "recent preview" pointer — used wherever
+    a forced recompute is meant to make the *next* page load recompute too,
+    not just the request that triggered it (apply, manual rename, an
+    explicit forced ``/preview`` call)."""
+    with _preview_lock:
+        _recent_preview.clear()
 
 
 # A starter rule (directory name + resolution + cleaned-up original filename),
@@ -185,6 +278,7 @@ def preview(ctx, directory: str | None = None) -> dict:
     if not files:
         ctx.log("No files in scope.")
         _cache_preview(ctx.task_id, {"renames": [], "pending": []})
+        _remember_recent_preview(directory, ctx.task_id)
         return {"rename_count": 0, "pending_count": 0}
 
     ctx.log(f"Matching rules for {len(files)} files…")
@@ -246,6 +340,7 @@ def preview(ctx, directory: str | None = None) -> dict:
     renames.sort(key=lambda r: r["path"])
     ctx.log(f"Done — {len(renames)} renames, {len(pending)} pending.")
     _cache_preview(ctx.task_id, {"renames": renames, "pending": pending})
+    _remember_recent_preview(directory, ctx.task_id)
     return {"rename_count": len(renames), "pending_count": len(pending)}
 
 
@@ -268,6 +363,13 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
     """
     if not file_ids:
         return {"renamed": 0, "skipped": 0, "errors": 0}
+
+    # Invalidate up front, not just on success: even a run that ends in
+    # errors/cancellation may have renamed some files before that happened,
+    # and the frontend's own post-apply refresh (force=True) won't run if the
+    # user navigated away mid-apply — the next page load must not be handed a
+    # pre-apply cached preview either way.
+    invalidate_recent_previews()
 
     con = db.connect()
     try:
