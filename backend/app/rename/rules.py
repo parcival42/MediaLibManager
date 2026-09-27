@@ -112,9 +112,10 @@ def _strip_resolution(raw: str, width: int, height: int) -> str:
     return re.sub(r"[ _-]{2,}", "_", stripped)
 
 
-def _render_filename(raw: str, seg: dict, filters_by_id: dict, file_row: dict) -> str:
-    value = raw
-    transforms = seg.get("transforms") or []
+_MAX_FILTER_PASSES = 10
+
+
+def _render_filename_pass(value: str, transforms: list, seg: dict, filters_by_id: dict, file_row: dict) -> str:
     if "strip_resolution" in transforms:
         width, height = file_row.get("width"), file_row.get("height")
         if width and height:
@@ -127,6 +128,27 @@ def _render_filename(raw: str, seg: dict, filters_by_id: dict, file_row: dict) -
         value = _clean_special_chars(value)
     value = re.sub(r" {2,}", " ", value)
     return value.strip(" -._")
+
+
+def _render_filename(raw: str, seg: dict, filters_by_id: dict, file_row: dict) -> str:
+    """Apply transforms/strip filters, repeating until the value stops changing.
+
+    A single pass can leave artifacts a later filter would also match (e.g. a
+    non-overlapping ".."->"." replace only closing two of three leftover dots,
+    or a multi-word strip term only matching once separators have already
+    been normalized to spaces by another filter). Without repeating, those
+    artifacts survive into the rendered name and cause it to match rules
+    again on the next rename. The pass count is capped so a filter whose
+    ``to`` re-introduces its own ``from`` can't loop forever.
+    """
+    transforms = seg.get("transforms") or []
+    value = raw
+    for _ in range(_MAX_FILTER_PASSES):
+        rendered = _render_filename_pass(value, transforms, seg, filters_by_id, file_row)
+        if rendered == value:
+            return rendered
+        value = rendered
+    return value
 
 
 def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_by_id: dict) -> str | None:
@@ -163,7 +185,15 @@ def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_b
         elif source == "filename":
             prefix_val = _join(rendered, separator)
             prefix = prefix_val + separator if prefix_val else ""
-            raw = stem[len(prefix):] if prefix and stem.startswith(prefix) else stem
+            if prefix and stem.startswith(prefix):
+                raw = stem[len(prefix):]
+            elif prefix_val and stem == prefix_val:
+                # A prior render's filename segment came out empty, so the
+                # separator that would precede it was dropped too (_join
+                # skips empty values) — the stem is just the prefix.
+                raw = ""
+            else:
+                raw = stem
             value, seg_missing = _render_filename(raw, seg, filters_by_id, file_row), False
         else:
             value, seg_missing = "", False
@@ -182,21 +212,21 @@ def next_free_name(newname: str, taken) -> str:
 
     ``taken`` is a predicate over candidate basenames, so callers can check
     whatever sources of truth matter to them (filesystem, DB, an in-memory
-    set for preview's simulation — or several at once). Note the quirk of
-    using the second-to-last dot-separated part as the stem when the name has
-    more than one dot (e.g. "video.file.mp4" -> stem "file").
+    set for preview's simulation — or several at once). Uses
+    ``os.path.splitext`` (split on the *last* dot) rather than a naive split
+    on every dot, so a stem with several dots in it (common here — original
+    filenames are often dot-separated) doesn't get truncated down to just its
+    last dot-separated token.
     """
     if not taken(newname):
         return newname
 
-    parts = newname.split(".")
-    suffix = parts[-1]
-    prefix = parts[-2] if len(parts) >= 2 else parts[0]
+    stem, ext = os.path.splitext(newname)
 
     cnt = 1
     candidate = newname
     while taken(candidate):
-        candidate = f"{prefix}_{cnt}.{suffix}"
+        candidate = f"{stem}_{cnt}{ext}"
         cnt += 1
     return candidate
 
