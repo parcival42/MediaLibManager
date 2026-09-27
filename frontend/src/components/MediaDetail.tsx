@@ -52,7 +52,6 @@ export default function MediaDetail({ item, onClose }: { item: FileItem; onClose
       setRenaming(false)
       queryClient.invalidateQueries({ queryKey: ['library'] })
       queryClient.invalidateQueries({ queryKey: ['duplicates'] })
-      queryClient.invalidateQueries({ queryKey: ['rename-preview'] })
     },
   })
 

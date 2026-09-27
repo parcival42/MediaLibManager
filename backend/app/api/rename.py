@@ -1,7 +1,9 @@
 """Rename endpoints — rule/assignment CRUD, dry-run preview, and apply.
 
-Preview is a plain read (pure DB derivation, like ``/api/duplicates``); apply
-goes through the serial task queue since it touches the filesystem.
+Preview and apply both go through the serial task queue: preview only reads
+the DB (no filesystem writes), but is queued the same way as apply so a large
+library reports progress instead of leaving the caller waiting on a single
+long request with no feedback.
 """
 import json
 import time
@@ -204,7 +206,7 @@ def delete_assignment(assignment_id: int, _: str = Depends(auth.current_user)):
     return {"ok": True}
 
 
-@router.get("/preview")
+@router.post("/preview")
 def preview_rename(directory: str | None = None, _: str = Depends(auth.current_user)):
     try:
         scope = paths.resolve_within_root(directory)
@@ -213,7 +215,29 @@ def preview_rename(directory: str | None = None, _: str = Depends(auth.current_u
     if not scope.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
     directory = str(scope) if scope != paths.media_root() else None
-    return engine.preview(directory=directory)
+
+    # The UI starts a new preview on every scope change and after every apply,
+    # so a finished one is done being useful the moment the next is created —
+    # without this, preview runs would otherwise fill up the Tasks history
+    # and push real scans/renames off its first page.
+    con = db.connect()
+    con.execute(
+        "DELETE FROM tasks WHERE type = 'rename_preview' AND status NOT IN ('queued', 'running')"
+    )
+    con.commit()
+    con.close()
+
+    task_id = runner.create_task("rename_preview", {"directory": directory})
+    runner.enqueue(task_id, lambda ctx: engine.preview(ctx, directory=directory))
+    return {"task_id": task_id}
+
+
+@router.get("/preview/{task_id}")
+def get_preview_result(task_id: str, _: str = Depends(auth.current_user)):
+    result = engine.get_cached_preview(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="preview result not available")
+    return result
 
 
 class ApplyRequest(BaseModel):

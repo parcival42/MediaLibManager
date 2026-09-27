@@ -198,6 +198,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   task_status_cancelled: { de: 'Abgebrochen', en: 'Cancelled' },
   task_status_interrupted: { de: 'Unterbrochen', en: 'Interrupted' },
   task_type_rename: { de: 'Umbenennen', en: 'Rename' },
+  task_type_rename_preview: { de: 'Umbenenn-Vorschau', en: 'Rename preview' },
   task_type_metadata_strip: { de: 'Metadaten entfernen', en: 'Strip metadata' },
   task_type_maintenance_cleanup: { de: 'Datenbank-Cleanup', en: 'Database cleanup' },
 
@@ -207,6 +208,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   },
   ren_refresh: { de: 'Vorschau aktualisieren', en: 'Refresh preview' },
   ren_previewing: { de: 'Vorschau wird geladen…', en: 'Loading preview…' },
+  ren_preview_queued: {
+    de: 'Wartet, bis der laufende Task fertig ist…',
+    en: 'Waiting for the current task to finish…',
+  },
   ren_none: { de: 'Keine Umbenennungen nötig.', en: 'No renames needed.' },
   ren_load_error: { de: 'Vorschau konnte nicht geladen werden.', en: 'Could not load preview.' },
   ren_proposed_count: { de: 'Vorschläge', en: 'proposed' },

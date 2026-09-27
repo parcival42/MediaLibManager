@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, LoadingPane, PageHeader, Spinner } from '../components/ui'
+import { Button, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
 
@@ -30,18 +30,20 @@ interface PreviewResponse {
   pending: PendingItem[]
 }
 
-interface Task {
+interface Task<R = unknown> {
   status: string
   progress: number
+  result?: R
+  log?: string
 }
 
 type FlatEntry = { kind: 'dir'; dir: string; items: RenameItem[] } | { kind: 'item'; item: RenameItem }
 
 /** Poll a task until it reaches a terminal state, then fire `onDone` once. */
-function useTaskPolling(taskId: string | null, onDone: () => void) {
-  const task = useQuery<Task>({
+function useTaskPolling<R = unknown>(taskId: string | null, onDone: () => void) {
+  const task = useQuery<Task<R>>({
     queryKey: ['task', taskId],
-    queryFn: () => api<Task>(`/api/tasks/${taskId}`),
+    queryFn: () => api<Task<R>>(`/api/tasks/${taskId}`),
     enabled: !!taskId,
     refetchInterval: (query) => {
       const s = query.state.data?.status
@@ -54,6 +56,23 @@ function useTaskPolling(taskId: string | null, onDone: () => void) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.data?.status])
   return task
+}
+
+/** Centered progress bar with the task's latest log line as the "what is it doing" caption. */
+function TaskProgressPanel({ percent, activity }: { percent: number; activity: string }) {
+  return (
+    <div className="w-full max-w-sm text-center">
+      <Spinner className="mx-auto mb-4" />
+      <div className="mb-2 min-h-[1.25rem] text-sm text-ink-2">{activity}</div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg/70">
+        <div
+          className="h-full rounded-full bg-accent transition-all"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="mt-1.5 text-xs font-semibold tabular-nums text-ink-3">{Math.round(percent)}%</div>
+    </div>
+  )
 }
 
 export default function Rename() {
@@ -72,24 +91,84 @@ export default function Rename() {
     return () => document.removeEventListener('mousedown', onClick)
   }, [treeOpen])
 
-  const list = useQuery<PreviewResponse>({
-    queryKey: ['rename-preview', scope],
-    queryFn: () => api(`/api/rename/preview${scope ? `?directory=${encodeURIComponent(scope)}` : ''}`),
-    refetchOnWindowFocus: false,
+  const [onlyCollisions, setOnlyCollisions] = useState(false)
+
+  // Preview runs through the task queue (same as apply) so a large library
+  // reports live progress instead of leaving a single long request with no
+  // feedback beyond a spinner on the button. Only the counts go into the
+  // task's own result (see backend/app/rename/engine.py) — the full list is
+  // fetched separately once the task is done, so a few thousand renames
+  // don't end up sitting in the Tasks history's result column.
+  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null)
+  const previewTaskIdRef = useRef<string | null>(null)
+  const startPreviewMut = useMutation({
+    mutationFn: (dir: string | null) =>
+      api<{ task_id: string }>(`/api/rename/preview${dir ? `?directory=${encodeURIComponent(dir)}` : ''}`, {
+        method: 'POST',
+      }),
   })
-  const renames = list.data?.renames ?? []
-  const pending = list.data?.pending ?? []
+  const previewTask = useTaskPolling(previewTaskId, () => {
+    setSelected(new Set())
+    setOnlyCollisions(false)
+  })
+  const previewStatus = previewTask.data?.status
+  const previewResultQuery = useQuery<PreviewResponse>({
+    queryKey: ['rename-preview-result', previewTaskId],
+    queryFn: () => api<PreviewResponse>(`/api/rename/preview/${previewTaskId}`),
+    enabled: !!previewTaskId && previewStatus === 'done',
+  })
+
+  const cancelPreviewTask = (taskId: string) => {
+    api(`/api/tasks/${taskId}/cancel`, { method: 'POST' }).catch(() => {})
+  }
+  // A scope change or apply starts a fresh preview — the old one is no longer
+  // wanted by anything, but left running it would keep enrichment paused and
+  // block real tasks behind it for no reason.
+  const refreshPreview = () => {
+    const previous = previewTaskIdRef.current
+    startPreviewMut.mutate(scope, {
+      onSuccess: (d) => {
+        previewTaskIdRef.current = d.task_id
+        setPreviewTaskId(d.task_id)
+      },
+    })
+    if (previous) cancelPreviewTask(previous)
+  }
+  useEffect(() => {
+    refreshPreview()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope])
+  useEffect(() => {
+    return () => {
+      if (previewTaskIdRef.current) cancelPreviewTask(previewTaskIdRef.current)
+    }
+  }, [])
+
+  const previewStarting = startPreviewMut.isPending || (!!previewTaskId && previewStatus === undefined)
+  const previewBusy =
+    previewStarting ||
+    previewStatus === 'queued' ||
+    previewStatus === 'running' ||
+    (previewStatus === 'done' && previewResultQuery.isLoading)
+  const previewFailed =
+    startPreviewMut.isError ||
+    previewStatus === 'error' ||
+    previewStatus === 'cancelled' ||
+    previewStatus === 'interrupted' ||
+    previewResultQuery.isError
+  const previewActivity =
+    previewStatus === 'queued'
+      ? t('ren_preview_queued')
+      : previewTask.data?.log?.trim().split('\n').pop() || t('ren_previewing')
+
+  const previewData = previewResultQuery.data
+  const renames = previewData?.renames ?? []
+  const pending = previewData?.pending ?? []
   const collisionCount = useMemo(() => renames.filter((r) => r.collision).length, [renames])
 
-  const [onlyCollisions, setOnlyCollisions] = useState(false)
   useEffect(() => {
     if (onlyCollisions && collisionCount === 0) setOnlyCollisions(false)
   }, [onlyCollisions, collisionCount])
-
-  useEffect(() => {
-    setSelected(new Set())
-    setOnlyCollisions(false)
-  }, [list.data])
 
   const visibleRenames = useMemo(
     () => (onlyCollisions ? renames.filter((r) => r.collision) : renames),
@@ -150,7 +229,7 @@ export default function Rename() {
     onSuccess: (d) => setApplyId(d.task_id),
   })
   const applyTask = useTaskPolling(applyId, () => {
-    list.refetch()
+    refreshPreview()
     setApplyId(null)
   })
   const applying = applyMut.isPending || applyTask.data?.status === 'running'
@@ -168,7 +247,7 @@ export default function Rename() {
       api(`/api/library/${id}/rename`, { method: 'POST', body: JSON.stringify({ new_name }) }),
     onSuccess: () => {
       setEditingId(null)
-      list.refetch()
+      refreshPreview()
     },
   })
   const startEdit = (r: RenameItem) => {
@@ -195,9 +274,9 @@ export default function Rename() {
         title={t('nav_rename')}
         subtitle={t('ren_subtitle')}
         actions={
-          <Button onClick={() => list.refetch()} disabled={list.isFetching}>
-            {list.isFetching && <Spinner className="h-3.5 w-3.5" />}
-            {list.isFetching ? t('ren_previewing') : t('ren_refresh')}
+          <Button onClick={refreshPreview} disabled={previewBusy}>
+            {previewBusy && <Spinner className="h-3.5 w-3.5" />}
+            {previewBusy ? t('ren_previewing') : t('ren_refresh')}
           </Button>
         }
       />
@@ -231,50 +310,56 @@ export default function Rename() {
         </div>
       </div>
 
-      <div className="mb-2 flex items-center gap-4 text-sm text-ink-3">
-        <span>
-          {renames.length.toLocaleString()} {t('ren_proposed_count')}
-        </span>
-        {collisionCount > 0 && (
-          <button
-            onClick={() => setOnlyCollisions((v) => !v)}
-            className={`rounded-full px-2 py-0.5 text-xs font-medium transition ${
-              onlyCollisions ? 'bg-warn text-bg' : 'bg-warn/15 text-warn hover:bg-warn/25'
-            }`}
-          >
-            {collisionCount} {t('ren_collisions')}
-          </button>
-        )}
-        {pending.length > 0 && (
-          <span>
-            {pending.length} {t('ren_pending_count')}
-          </span>
-        )}
-      </div>
+      {previewData && (
+        <>
+          <div className="mb-2 flex items-center gap-4 text-sm text-ink-3">
+            <span>
+              {renames.length.toLocaleString()} {t('ren_proposed_count')}
+            </span>
+            {collisionCount > 0 && (
+              <button
+                onClick={() => setOnlyCollisions((v) => !v)}
+                className={`rounded-full px-2 py-0.5 text-xs font-medium transition ${
+                  onlyCollisions ? 'bg-warn text-bg' : 'bg-warn/15 text-warn hover:bg-warn/25'
+                }`}
+              >
+                {collisionCount} {t('ren_collisions')}
+              </button>
+            )}
+            {pending.length > 0 && (
+              <span>
+                {pending.length} {t('ren_pending_count')}
+              </span>
+            )}
+          </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        {renames.length > 0 && (
-          <Button size="sm" variant="subtle" onClick={selectAll}>
-            {t('ren_select_all')}
-          </Button>
-        )}
-        {selected.size > 0 && (
-          <Button size="sm" variant="subtle" onClick={() => setSelected(new Set())}>
-            {t('dup_deselect_all')}
-          </Button>
-        )}
-        {selected.size > 0 && (
-          <Button size="sm" onClick={onApply} disabled={applying}>
-            {applying
-              ? `${t('ren_applying')} ${Math.round(applyTask.data?.progress ?? 0)}%`
-              : `${t('ren_apply')} (${selected.size})`}
-          </Button>
-        )}
-      </div>
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            {renames.length > 0 && (
+              <Button size="sm" variant="subtle" onClick={selectAll}>
+                {t('ren_select_all')}
+              </Button>
+            )}
+            {selected.size > 0 && (
+              <Button size="sm" variant="subtle" onClick={() => setSelected(new Set())}>
+                {t('dup_deselect_all')}
+              </Button>
+            )}
+            {selected.size > 0 && (
+              <Button size="sm" onClick={onApply} disabled={applying}>
+                {applying
+                  ? `${t('ren_applying')} ${Math.round(applyTask.data?.progress ?? 0)}%`
+                  : `${t('ren_apply')} (${selected.size})`}
+              </Button>
+            )}
+          </div>
+        </>
+      )}
 
-      {list.isLoading ? (
-        <LoadingPane className="h-32" />
-      ) : list.isError ? (
+      {previewBusy ? (
+        <div className="flex flex-1 items-center justify-center">
+          <TaskProgressPanel percent={previewTask.data?.progress ?? 0} activity={previewActivity} />
+        </div>
+      ) : previewFailed ? (
         <EmptyState text={t('ren_load_error')} />
       ) : renames.length === 0 ? (
         <EmptyState text={t('ren_none')} />

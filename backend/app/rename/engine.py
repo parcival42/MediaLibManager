@@ -1,19 +1,39 @@
 """Rule assignment lookup, dry-run preview, and apply.
 
-Mirrors the dedup module's split: ``preview`` is a pure derivation over the
-already-enriched ``files`` rows (cheap, runs synchronously on a GET like
-``/api/duplicates``), while ``apply_renames`` touches the filesystem and runs
-through the serial task queue (like ``dedup/delete.py``).
+Both ``preview`` and ``apply_renames`` run through the serial task queue so a
+large library reports progress instead of a single long request with no
+feedback. ``preview``'s full result (every proposed rename) is kept out of the
+``tasks.result`` column — that column is read for every row on the Tasks
+history list, and a few thousand renames there would bloat it badly — and is
+instead cached in ``_preview_cache`` here, fetched once via
+``get_cached_preview``.
 """
 import json
 import os
 import sqlite3
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 
 from .. import db
 from . import rules
+
+# Full preview payloads, keyed by task id — kept out of the tasks table (see
+# module docstring). Bounded to a handful of entries; nothing needs more than
+# the latest one or two in flight.
+_MAX_CACHED_PREVIEWS = 4
+_preview_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def get_cached_preview(task_id: str) -> dict | None:
+    return _preview_cache.get(task_id)
+
+
+def _cache_preview(task_id: str, result: dict) -> None:
+    _preview_cache[task_id] = result
+    while len(_preview_cache) > _MAX_CACHED_PREVIEWS:
+        _preview_cache.popitem(last=False)
+
 
 # A starter rule (directory name + resolution + cleaned-up original filename),
 # so a fresh install doesn't start with an empty rule editor.
@@ -101,12 +121,15 @@ def _best_assignment(assignments: list[dict], path: str) -> dict | None:
 _FILE_COLUMNS = "id, path, type, width, height, duration"
 
 
-def preview(directory: str | None = None) -> dict:
+def preview(ctx, directory: str | None = None) -> dict:
     """Compute proposed renames for every present file under ``directory``
     (or the whole library) that has an assigned rule.
 
-    Returns ``{"renames": [...], "pending": [...]}`` — ``pending`` lists files
-    whose rule needs resolution/duration that hasn't been enriched yet.
+    Returns only ``{"rename_count": ..., "pending_count": ...}`` as the task
+    result — the full ``{"renames": [...], "pending": [...]}`` (``pending``
+    lists files whose rule needs resolution/duration that hasn't been
+    enriched yet) is stashed in ``_preview_cache`` under this task's id
+    instead, for the caller to fetch via ``get_cached_preview``.
 
     Collision resolution is simulated here (same suffix algorithm and the
     same path-sorted processing order as ``apply_renames`` uses), so a file
@@ -120,7 +143,13 @@ def preview(directory: str | None = None) -> dict:
     whether the row is currently present, and ``apply_renames`` checks the
     DB the same way, so a stale row can't make preview promise a name that
     apply then can't actually use.
+
+    Runs through the task queue like ``apply_renames`` (rather than as a
+    plain synchronous read) purely so a large library reports progress
+    instead of leaving the UI guessing for however long the matching loop
+    below takes — it still only reads the DB, no filesystem writes.
     """
+    ctx.log(f"Scope: {directory}" if directory else "Scope: entire library")
     con = db.connect()
     try:
         where = ["present = 1"]
@@ -148,60 +177,76 @@ def preview(directory: str | None = None) -> dict:
     finally:
         con.close()
 
+    ctx.progress(5)
     taken_by_dir: dict[str, set[str]] = defaultdict(set)
     for p in all_paths:
         taken_by_dir[os.path.dirname(p)].add(os.path.basename(p))
 
+    if not files:
+        ctx.log("No files in scope.")
+        _cache_preview(ctx.task_id, {"renames": [], "pending": []})
+        return {"rename_count": 0, "pending_count": 0}
+
+    ctx.log(f"Matching rules for {len(files)} files…")
+    match_step = max(1, len(files) // 50)  # ~50 progress/log updates regardless of scale
     candidates: list[dict] = []
     pending: list[dict] = []
-    for f in files:
+    for i, f in enumerate(files, start=1):
+        ctx.raise_if_cancelled()
         match = _best_assignment(assignments, f["path"])
-        if not match:
-            continue
-        target = rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
-        current_name = os.path.basename(f["path"])
-        if target is None:
-            pending.append({
-                "file_id": f["id"], "path": f["path"],
-                "current_name": current_name, "rule_name": match["rule_name"],
-            })
-            continue
-        if target == current_name:
-            continue  # already correctly named
-        candidates.append({
-            "file_id": f["id"],
-            "path": f["path"],
-            "directory": os.path.dirname(f["path"]),
-            "current_name": current_name,
-            "target": target,
-            "rule_id": match["rule_id"],
-            "rule_name": match["rule_name"],
-        })
+        if match:
+            target = rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
+            current_name = os.path.basename(f["path"])
+            if target is None:
+                pending.append({
+                    "file_id": f["id"], "path": f["path"],
+                    "current_name": current_name, "rule_name": match["rule_name"],
+                })
+            elif target != current_name:
+                candidates.append({
+                    "file_id": f["id"],
+                    "path": f["path"],
+                    "directory": os.path.dirname(f["path"]),
+                    "current_name": current_name,
+                    "target": target,
+                    "rule_id": match["rule_id"],
+                    "rule_name": match["rule_name"],
+                })
+        if i % match_step == 0 or i == len(files):
+            ctx.progress(5 + 80 * i / len(files))
+            ctx.log(f"Matched {i} of {len(files)} files…")
 
     candidates.sort(key=lambda c: c["path"])
 
+    ctx.log(f"Resolving {len(candidates)} potential collisions…")
     renames: list[dict] = []
-    for c in candidates:
-        taken = taken_by_dir[c["directory"]]
-        own = c["current_name"]
-        final = rules.next_free_name(c["target"], lambda n: n in taken and n != own)
-        taken.discard(own)
-        taken.add(final)
-        if final == own:
-            continue  # already correctly (suffix-)named once resolved
-        renames.append({
-            "file_id": c["file_id"],
-            "path": c["path"],
-            "directory": c["directory"],
-            "current_name": own,
-            "new_name": final,
-            "rule_id": c["rule_id"],
-            "rule_name": c["rule_name"],
-            "collision": final != c["target"],
-        })
+    if candidates:
+        collision_step = max(1, len(candidates) // 20)
+        for i, c in enumerate(candidates, start=1):
+            ctx.raise_if_cancelled()
+            taken = taken_by_dir[c["directory"]]
+            own = c["current_name"]
+            final = rules.next_free_name(c["target"], lambda n: n in taken and n != own)
+            taken.discard(own)
+            taken.add(final)
+            if final != own:
+                renames.append({
+                    "file_id": c["file_id"],
+                    "path": c["path"],
+                    "directory": c["directory"],
+                    "current_name": own,
+                    "new_name": final,
+                    "rule_id": c["rule_id"],
+                    "rule_name": c["rule_name"],
+                    "collision": final != c["target"],
+                })
+            if i % collision_step == 0 or i == len(candidates):
+                ctx.progress(85 + 15 * i / len(candidates))
 
     renames.sort(key=lambda r: r["path"])
-    return {"renames": renames, "pending": pending}
+    ctx.log(f"Done — {len(renames)} renames, {len(pending)} pending.")
+    _cache_preview(ctx.task_id, {"renames": renames, "pending": pending})
+    return {"rename_count": len(renames), "pending_count": len(pending)}
 
 
 def apply_renames(file_ids: list[int], ctx) -> dict:
