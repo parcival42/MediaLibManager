@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
@@ -30,6 +30,13 @@ interface PreviewResponse {
   pending: PendingItem[]
 }
 
+interface ApplyResult {
+  renamed: number
+  skipped: number
+  errors: number
+  renamed_ids: number[]
+}
+
 interface Task<R = unknown> {
   status: string
   progress: number
@@ -39,8 +46,10 @@ interface Task<R = unknown> {
 
 type FlatEntry = { kind: 'dir'; dir: string; items: RenameItem[] } | { kind: 'item'; item: RenameItem }
 
-/** Poll a task until it reaches a terminal state, then fire `onDone` once. */
-function useTaskPolling<R = unknown>(taskId: string | null, onDone: () => void) {
+/** Poll a task until it reaches a terminal state, then fire `onDone` once with
+ * its final data (so the caller can act on `result` without a stale closure
+ * over the hook's own return value). */
+function useTaskPolling<R = unknown>(taskId: string | null, onDone: (data: Task<R> | undefined) => void) {
   const task = useQuery<Task<R>>({
     queryKey: ['task', taskId],
     queryFn: () => api<Task<R>>(`/api/tasks/${taskId}`),
@@ -53,7 +62,7 @@ function useTaskPolling<R = unknown>(taskId: string | null, onDone: () => void) 
   })
   useEffect(() => {
     const s = task.data?.status
-    if (s && s !== 'running' && s !== 'queued') onDone()
+    if (s && s !== 'running' && s !== 'queued') onDone(task.data)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.data?.status])
   return task
@@ -78,6 +87,7 @@ function TaskProgressPanel({ percent, activity }: { percent: number; activity: s
 
 export default function Rename() {
   const { t } = useI18n()
+  const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const [scope, setScope] = useState<string | null>(null)
@@ -120,6 +130,12 @@ export default function Rename() {
     queryKey: ['rename-preview-result', previewTaskId],
     queryFn: () => api<PreviewResponse>(`/api/rename/preview/${previewTaskId}`),
     enabled: !!previewTaskId && previewStatus === 'done',
+    // The payload for a given task id never changes on the server once it's
+    // done, so this never needs a background refetch (window focus, etc.) —
+    // and must not get one: apply patches this exact cache entry locally
+    // (see applyTask below), and an automatic refetch would silently
+    // overwrite that patch with the pre-apply snapshot.
+    staleTime: Infinity,
   })
 
   const cancelPreviewTask = (taskId: string) => {
@@ -244,8 +260,41 @@ export default function Rename() {
       }),
     onSuccess: (d) => setApplyId(d.task_id),
   })
-  const applyTask = useTaskPolling(applyId, () => {
-    refreshPreview()
+  const applyTask = useTaskPolling<ApplyResult>(applyId, (data) => {
+    // A cancelled or errored run never gets a `result` (only 'done' tasks do)
+    // — some files may still have been renamed before that happened, so fall
+    // back to a real recompute rather than leaving them listed as pending.
+    if (data?.status !== 'done' || !data.result) {
+      refreshPreview()
+      setApplyId(null)
+      return
+    }
+    // Otherwise, patch the already-shown list locally instead of re-running
+    // the whole scope's preview: apply already recomputes each target fresh
+    // from the DB, so the remaining candidates' data didn't change — only
+    // these ids did. `renamed_ids` (not just the original selection) since a
+    // file can be skipped or error out and must stay listed. The one thing
+    // this doesn't catch: a remaining candidate whose collision suffix was
+    // only needed because one of *these* files held its plain target name —
+    // that stays stale until the next real recompute (Refresh, a scan, or
+    // 60 min).
+    const renamedIds = data.result.renamed_ids
+    if (renamedIds?.length) {
+      const idSet = new Set(renamedIds)
+      if (previewTaskId) {
+        queryClient.setQueryData<PreviewResponse>(['rename-preview-result', previewTaskId], (old) =>
+          old ? { ...old, renames: old.renames.filter((r) => !idSet.has(r.file_id)) } : old,
+        )
+      }
+      // No new preview task runs now, so nothing else clears these out of the
+      // selection — a skipped/errored id (still listed) stays selected on
+      // purpose, so the user can see and retry it.
+      setSelected((prev) => {
+        const next = new Set(prev)
+        idSet.forEach((id) => next.delete(id))
+        return next
+      })
+    }
     setApplyId(null)
   })
   const applying = applyMut.isPending || applyTask.data?.status === 'running'

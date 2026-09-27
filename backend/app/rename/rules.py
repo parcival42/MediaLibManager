@@ -30,6 +30,29 @@ def _clean_special_chars(raw: str) -> str:
     return re.sub(r"_+", "_", cleaned).strip("_")
 
 
+def _word_pattern(term: str) -> str:
+    """Match ``term`` as a standalone token, guarded by a boundary only on a
+    side where the term's own edge character is alphanumeric.
+
+    Plain ``\\b`` treats ``_`` as a word character, so a term like
+    ``"SceneName_"`` glued directly onto the next word with no space (e.g.
+    ``"SceneName_ActualTitle"``, a common scene-release naming convention)
+    would never match right after its own trailing ``_`` — that side already
+    *is* the separator, so no additional boundary is needed there. A term
+    that starts/ends with a letter or digit still gets the usual boundary
+    check, so ordinary tags (``"1080p"``, ``"XXX"``, …) match exactly as
+    before.
+    """
+    # [^\W_] = a \w character that isn't "_" -- i.e. "word" here means the same
+    # Unicode letters/digits term[0].isalnum() checks, keeping this consistent
+    # with accented names (_clean_special_chars deliberately keeps À-ɏ) rather
+    # than the ASCII-only [A-Za-z0-9], which would let a term match inside an
+    # accented word (e.g. "Lia" inside "Emília").
+    prefix = r"(?<![^\W_])" if term[0].isalnum() else ""
+    suffix = r"(?![^\W_])" if term[-1].isalnum() else ""
+    return prefix + re.escape(term) + suffix
+
+
 def _apply_strip_filter(stem: str, f: dict) -> str:
     """Apply a single user-defined strip filter to ``stem``.
 
@@ -41,7 +64,7 @@ def _apply_strip_filter(stem: str, f: dict) -> str:
     if f.get("type") == "strings":
         for term in entries:
             if term:
-                stem = re.sub(r"\b" + re.escape(term) + r"\b", "", stem, flags=re.I)
+                stem = re.sub(_word_pattern(term), "", stem, flags=re.I)
     elif f.get("type") == "replace_chars":
         for entry in entries:
             src, dst = entry.get("from", ""), entry.get("to", "")

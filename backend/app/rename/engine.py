@@ -385,6 +385,7 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
 
         total = len(ordered)
         renamed = skipped = errors = 0
+        renamed_ids: list[int] = []
 
         for i, fid in enumerate(ordered, start=1):
             ctx.raise_if_cancelled()
@@ -440,9 +441,10 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
                 continue
 
             renamed += 1
+            renamed_ids.append(fid)
             ctx.log(f"{current_name} -> {final_name}")
             ctx.progress(100 * i / total)
 
-        return {"renamed": renamed, "skipped": skipped, "errors": errors}
+        return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
     finally:
         con.close()
