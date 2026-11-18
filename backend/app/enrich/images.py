@@ -24,22 +24,28 @@ def image_meta(path: str) -> dict:
     return {"width": width, "height": height}
 
 
-def make_thumbnail_b64(img: Image.Image) -> str:
-    """Downscale ``img`` and return a base64-encoded JPEG (no data-URI prefix)."""
+def _thumbnail_image(img: Image.Image) -> Image.Image:
     thumb = ImageOps.exif_transpose(img).convert("RGB")
     thumb.thumbnail((THUMB_MAX, THUMB_MAX))
+    return thumb
+
+
+def _encode_jpeg_b64(img: Image.Image, quality: int) -> str:
     buf = BytesIO()
-    thumb.save(buf, format="JPEG", quality=72)
+    img.save(buf, format="JPEG", quality=quality)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def make_thumbnail_b64(img: Image.Image) -> str:
+    """Downscale ``img`` and return a base64-encoded JPEG (no data-URI prefix)."""
+    return _encode_jpeg_b64(_thumbnail_image(img), quality=72)
 
 
 def make_preview_b64(img: Image.Image) -> str:
     """Small base64 JPEG (no data-URI prefix) for one frame of the strip."""
     p = ImageOps.exif_transpose(img).convert("RGB")
     p.thumbnail(PREVIEW_MAX)
-    buf = BytesIO()
-    p.save(buf, format="JPEG", quality=60)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    return _encode_jpeg_b64(p, quality=60)
 
 
 def mean_saturation(img: Image.Image) -> float:
@@ -60,6 +66,11 @@ def image_phash_thumb(path: str) -> dict:
     with Image.open(path) as img:
         img.load()
         phash = str(imagehash.phash(img))
-        saturation = mean_saturation(img)
-        thumb = make_thumbnail_b64(img)
+        thumb_img = _thumbnail_image(img)
+    # Saturation from the thumbnail, not the full image: a full-resolution
+    # float32 array (plus temporaries) is >1 GB for a large photo per worker
+    # thread, and the colour backfill also computes it from the thumbnail --
+    # this keeps both sources consistent.
+    saturation = mean_saturation(thumb_img)
+    thumb = _encode_jpeg_b64(thumb_img, quality=72)
     return {"phash": phash, "mean_saturation": saturation, "thumbnail_b64": thumb}

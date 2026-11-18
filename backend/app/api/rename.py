@@ -21,12 +21,31 @@ ALLOWED_SOURCES = {"literal", "dirname", "resolution", "duration", "filename"}
 ALLOWED_FILTER_TYPES = {"strings", "replace_chars"}
 
 
-def _validate_segments(segments: list[dict]) -> None:
+def _reject_path_chars(value, what: str) -> None:
+    """Rule/filter text ends up in target filenames; "/" etc. would turn a
+    rename into a move (see engine.is_valid_filename)."""
+    if isinstance(value, str) and any(c in value for c in engine.FORBIDDEN_NAME_CHARS):
+        raise HTTPException(status_code=400, detail=f"{what} must not contain / or \\")
+
+
+def _validate_segments(segments: list[dict], separator: str) -> None:
     if not segments:
         raise HTTPException(status_code=400, detail="rule needs at least one segment")
+    _reject_path_chars(separator, "separator")
     for seg in segments:
         if seg.get("source") not in ALLOWED_SOURCES:
             raise HTTPException(status_code=400, detail=f"invalid segment source: {seg.get('source')}")
+        if seg.get("source") == "literal":
+            _reject_path_chars(seg.get("text", ""), "literal text")
+
+
+def _validate_filter(req: "StripFilterIn") -> None:
+    if req.type not in ALLOWED_FILTER_TYPES:
+        raise HTTPException(status_code=400, detail=f"invalid filter type: {req.type}")
+    if req.type == "replace_chars":
+        for entry in req.entries:
+            if isinstance(entry, dict):
+                _reject_path_chars(entry.get("to", ""), "replacement")
 
 
 class StripFilterIn(BaseModel):
@@ -56,8 +75,7 @@ def list_strip_filters(_: str = Depends(auth.current_user)):
 
 @router.post("/strip-filters")
 def create_strip_filter(req: StripFilterIn, _: str = Depends(auth.current_user)):
-    if req.type not in ALLOWED_FILTER_TYPES:
-        raise HTTPException(status_code=400, detail=f"invalid filter type: {req.type}")
+    _validate_filter(req)
     con = db.connect()
     cur = con.execute(
         "INSERT INTO strip_filters(name, type, entries) VALUES(?, ?, ?)",
@@ -71,8 +89,7 @@ def create_strip_filter(req: StripFilterIn, _: str = Depends(auth.current_user))
 
 @router.put("/strip-filters/{filter_id}")
 def update_strip_filter(filter_id: int, req: StripFilterIn, _: str = Depends(auth.current_user)):
-    if req.type not in ALLOWED_FILTER_TYPES:
-        raise HTTPException(status_code=400, detail=f"invalid filter type: {req.type}")
+    _validate_filter(req)
     con = db.connect()
     cur = con.execute(
         "UPDATE strip_filters SET name = ?, type = ?, entries = ? WHERE id = ?",
@@ -113,7 +130,7 @@ def list_rules(_: str = Depends(auth.current_user)):
 
 @router.post("/rules")
 def create_rule(rule: RuleIn, _: str = Depends(auth.current_user)):
-    _validate_segments(rule.segments)
+    _validate_segments(rule.segments, rule.separator)
     con = db.connect()
     cur = con.execute(
         "INSERT INTO rename_rules(name, segments, separator, created_at) VALUES(?, ?, ?, ?)",
@@ -127,7 +144,7 @@ def create_rule(rule: RuleIn, _: str = Depends(auth.current_user)):
 
 @router.put("/rules/{rule_id}")
 def update_rule(rule_id: int, rule: RuleIn, _: str = Depends(auth.current_user)):
-    _validate_segments(rule.segments)
+    _validate_segments(rule.segments, rule.separator)
     con = db.connect()
     cur = con.execute(
         "UPDATE rename_rules SET name = ?, segments = ?, separator = ? WHERE id = ?",
@@ -280,9 +297,6 @@ def apply_rename(req: ApplyRequest, _: str = Depends(auth.current_user)):
 # --- Quick edit: rule-free remove/replace of terms in filenames -------------
 
 QUICK_MODES = {"remove", "replace"}
-# Characters that would turn a filename into a path (or are invalid in one).
-_FORBIDDEN_IN_NAME = ("/", "\\", "\0")
-
 
 class QuickParams(BaseModel):
     directory: str | None = None
@@ -310,8 +324,7 @@ def _resolve_quick(req: QuickParams) -> tuple[str, list[str], str]:
     if not terms:
         raise HTTPException(status_code=400, detail="no terms given")
     replacement = req.replacement if req.mode == "replace" else ""
-    if any(c in replacement for c in _FORBIDDEN_IN_NAME):
-        raise HTTPException(status_code=400, detail="replacement contains invalid characters")
+    _reject_path_chars(replacement, "replacement")
     return str(scope), terms, replacement
 
 

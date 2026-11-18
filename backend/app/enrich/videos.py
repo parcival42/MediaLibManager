@@ -39,7 +39,14 @@ def video_meta(path: str, ftype: str) -> dict:
                 cols["width"] = int(vs["width"])
             if vs.get("height"):
                 cols["height"] = int(vs["height"])
-        cols["has_title_comment"] = 1 if tools.has_title_or_comment(path) else 0
+        # Only feeds the metadata-strip feature: if exiftool can't read the
+        # file, leave the flag unknown (NULL, never a strip candidate) rather
+        # than failing the whole file, which would also cost it duration,
+        # pHashes and MD5 for dedup and rename.
+        try:
+            cols["has_title_comment"] = 1 if tools.has_title_or_comment(path) else 0
+        except tools.ToolError:
+            cols["has_title_comment"] = None
 
     return cols
 

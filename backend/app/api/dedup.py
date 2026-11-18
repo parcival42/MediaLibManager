@@ -25,7 +25,9 @@ router = APIRouter(prefix="/api")
 # (/api/media/{id}/thumb) and only a presence flag travels in the list payload.
 MEMBER_COLUMNS = ("id, path, type, size, width, height, duration, codec, mtime, "
                   "enrich_status, (thumbnail_b64 IS NOT NULL) AS has_thumb, "
-                  "phash, mean_saturation, frame_hashes, frames_b64")
+                  "phash, mean_saturation, frame_hashes, "
+                  "CASE WHEN json_valid(frames_b64) THEN json_array_length(frames_b64) "
+                  "ELSE 0 END AS frame_count")
 
 # Strongest-evidence-first — matches the detection pass order in dedup/rebuild.py.
 KIND_ORDER = ["exact_image", "exact_video", "exact_other", "visual", "video", "deep"]
@@ -73,10 +75,8 @@ def _enrich_group(g: dict, members: list[dict], frame_threshold: int) -> dict:
         }
 
         if m["type"] == "video":
-            try:
-                item["frames"] = json.loads(m["frames_b64"]) if m["frames_b64"] else []
-            except (TypeError, ValueError):
-                item["frames"] = []
+            # Frames themselves are served by /api/media/{id}/frame/{n}.
+            item["frame_count"] = m["frame_count"] or 0
 
         if kind == "visual" and ref_phash is not None and not item["is_keep"]:
             mh = parse_hash(m["phash"])
@@ -94,7 +94,7 @@ def _enrich_group(g: dict, members: list[dict], frame_threshold: int) -> dict:
         out_members.append(item)
 
     sizes = [m["size"] or 0 for m in ordered]
-    keep_size = reference["size"] or 0 if reference else 0
+    keep_size = (reference["size"] or 0) if reference else 0
     reclaimable = sum(sizes) - keep_size
     return {"id": g["id"], "kind": kind, "ignored": bool(g["ignored"]), "members": out_members, "reclaimable": reclaimable}
 
@@ -116,16 +116,27 @@ def list_duplicates(_: str = Depends(auth.current_user), kind: str | None = None
         params,
     ).fetchall()
 
-    result = []
-    for g in groups:
-        members = con.execute(
-            f"SELECT {MEMBER_COLUMNS} FROM files f "
-            "JOIN duplicate_members m ON m.file_id = f.id "
-            "WHERE m.group_id = ? ORDER BY f.path",
-            (g["id"],),
-        ).fetchall()
-        result.append(_enrich_group(dict(g), [dict(r) for r in members], frame_threshold))
+    # All members in one query instead of one per group.
+    members_by_group: dict[int, list[dict]] = {}
+    member_sql = (
+        f"SELECT m.group_id AS group_id, {MEMBER_COLUMNS} FROM files f "
+        "JOIN duplicate_members m ON m.file_id = f.id "
+    )
+    member_params: list = []
+    if kind:
+        # Subquery, not a JOIN: duplicate_groups also has an "id" column,
+        # which would make MEMBER_COLUMNS' bare "id" ambiguous.
+        member_sql += "WHERE m.group_id IN (SELECT id FROM duplicate_groups WHERE kind = ?) "
+        member_params.append(kind)
+    member_sql += "ORDER BY f.path"
+    for r in con.execute(member_sql, member_params).fetchall():
+        members_by_group.setdefault(r["group_id"], []).append(dict(r))
     con.close()
+
+    result = [
+        _enrich_group(dict(g), members_by_group.get(g["id"], []), frame_threshold)
+        for g in groups
+    ]
     return {"groups": result}
 
 

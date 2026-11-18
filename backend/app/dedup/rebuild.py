@@ -68,8 +68,12 @@ def rebuild(ctx, directory: str | None = None) -> dict:
         claimed: set[int] = set()
 
         def claim(groups: list[list[int]]) -> None:
+            # Keep one representative per group available to later passes:
+            # excluding every member made a file that only resembles a member
+            # of an exact group (e.g. a downscaled copy) unfindable. The
+            # others are interchangeable with the representative anyway.
             for g in groups:
-                claimed.update(g)
+                claimed.update(sorted(g)[1:])
 
         ctx.log("Finding exact (MD5) duplicates…")
         exact_groups_raw = exact.find_exact_groups(con, pattern)
@@ -97,7 +101,8 @@ def rebuild(ctx, directory: str | None = None) -> dict:
         if deep_enabled:
             ctx.log("Finding similar videos (deep compare)…")
             deep_groups = visual.find_deep_groups(
-                con, deep_threshold, deep_min_fraction, claimed, ignore_pairs, pattern
+                con, deep_threshold, deep_min_fraction, claimed, ignore_pairs, pattern,
+                check_cancelled=ctx.raise_if_cancelled,
             )
         else:
             ctx.log("Deep compare disabled — skipping.")

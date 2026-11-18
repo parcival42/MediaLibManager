@@ -1,6 +1,7 @@
 """Library endpoints — paginated listing, single item, and ranged media streaming."""
 import base64
 import binascii
+import json
 import mimetypes
 import os
 import sqlite3
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 from .. import auth, db, paths, stash
 from ..rename import engine as rename_engine
+from ..tasks import runner
 
 router = APIRouter(prefix="/api")
 
@@ -118,48 +120,72 @@ def rename_file(file_id: int, body: RenameIn, _: str = Depends(auth.current_user
     the user picked this name deliberately, so they should pick a different
     one rather than silently get a ``_1``."""
     new_name = body.new_name.strip()
-    if not new_name or "/" in new_name or "\\" in new_name:
+    if not rename_engine.is_valid_filename(new_name):
         raise HTTPException(status_code=400, detail="invalid filename")
 
+    # Runs through the serial task queue like every other file-changing
+    # action, so it can't collide with a running rename/strip/delete task or
+    # an enrichment step on the same file; the request waits for the result.
+    try:
+        return runner.run_and_wait(
+            "rename", {"count": 1, "manual": True},
+            lambda ctx: _rename_single(file_id, new_name, ctx),
+            timeout=_MANUAL_RENAME_TIMEOUT,
+        )
+    except _RenameRejected as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    except TimeoutError:
+        raise HTTPException(status_code=409, detail="another task is running, try again shortly")
+
+
+_MANUAL_RENAME_TIMEOUT = 60  # seconds to wait for the queue
+
+
+class _RenameRejected(Exception):
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+def _rename_single(file_id: int, new_name: str, ctx) -> dict:
     con = db.connect()
-    row = con.execute("SELECT path FROM files WHERE id = ?", (file_id,)).fetchone()
-    if not row:
-        con.close()
-        raise HTTPException(status_code=404, detail="file not found")
-
-    old_path = Path(row["path"])
-    if not old_path.is_file():
-        con.close()
-        raise HTTPException(status_code=404, detail="file no longer on disk")
-
-    new_path = old_path.parent / new_name
-    if new_path == old_path:
-        con.close()
-        return {"path": str(old_path), "filename": old_path.name}
-    # files.path is UNIQUE regardless of `present`, so also reject a name a
-    # stale (no-longer-on-disk) row already claims, not just a real file.
-    taken = new_path.exists() or con.execute(
-        "SELECT 1 FROM files WHERE path = ? AND id != ?", (str(new_path), file_id)
-    ).fetchone() is not None
-    if taken:
-        con.close()
-        raise HTTPException(status_code=409, detail="a file with that name already exists")
-
     try:
-        old_path.rename(new_path)
-    except OSError as exc:
-        con.close()
-        raise HTTPException(status_code=500, detail=str(exc))
+        row = con.execute("SELECT path FROM files WHERE id = ?", (file_id,)).fetchone()
+        if not row:
+            raise _RenameRejected(404, "file not found")
 
-    try:
-        con.execute("UPDATE files SET path = ? WHERE id = ?", (str(new_path), file_id))
-        con.commit()
-    except sqlite3.Error as exc:
-        con.rollback()
-        new_path.rename(old_path)  # keep disk and DB from disagreeing
+        old_path = Path(row["path"])
+        if not old_path.is_file():
+            raise _RenameRejected(404, "file no longer on disk")
+
+        new_path = old_path.parent / new_name
+        if new_path == old_path:
+            return {"path": str(old_path), "filename": old_path.name}
+        # files.path is UNIQUE regardless of `present`, so also reject a name a
+        # stale (no-longer-on-disk) row already claims, not just a real file.
+        taken = new_path.exists() or con.execute(
+            "SELECT 1 FROM files WHERE path = ? AND id != ?", (str(new_path), file_id)
+        ).fetchone() is not None
+        if taken:
+            raise _RenameRejected(409, "a file with that name already exists")
+
+        try:
+            old_path.rename(new_path)
+        except OSError as exc:
+            raise _RenameRejected(500, str(exc))
+
+        try:
+            con.execute("UPDATE files SET path = ? WHERE id = ?", (str(new_path), file_id))
+            con.commit()
+        except sqlite3.Error as exc:
+            con.rollback()
+            new_path.rename(old_path)  # keep disk and DB from disagreeing
+            raise _RenameRejected(409, str(exc))
+    finally:
         con.close()
-        raise HTTPException(status_code=409, detail=str(exc))
-    con.close()
+
+    ctx.log(f"{old_path.name} -> {new_path.name}")
     # This page's own rename preview refreshes itself after this call, but a
     # cached preview for another scope wouldn't otherwise notice this rename.
     rename_engine.invalidate_recent_previews()
@@ -178,9 +204,15 @@ def _ranged_response(path: str, request: Request) -> StreamingResponse | FileRes
     # Parse a single "bytes=start-end" range.
     try:
         _, rng = range_header.split("=", 1)
-        start_s, end_s = rng.split("-", 1)
-        start = int(start_s) if start_s else 0
-        end = int(end_s) if end_s else file_size - 1
+        start_s, end_s = rng.split(",", 1)[0].strip().split("-", 1)
+        if start_s:
+            start = int(start_s)
+            end = int(end_s) if end_s else file_size - 1
+        else:
+            # Suffix range "bytes=-N": the last N bytes (players use this to
+            # fetch a trailing moov atom).
+            start = max(0, file_size - int(end_s))
+            end = file_size - 1
     except ValueError:
         raise HTTPException(status_code=416, detail="invalid range")
     end = min(end, file_size - 1)
@@ -277,6 +309,24 @@ def media_thumbnail(file_id: int, _: str = Depends(auth.current_user)):
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+@router.get("/media/{file_id}/frame/{index}")
+def media_frame(file_id: int, index: int, _: str = Depends(auth.current_user)):
+    """Serve one of a video's sampled frames (``files.frames_b64``) as JPEG,
+    so the duplicate list doesn't have to inline them as base64."""
+    con = db.connect()
+    row = con.execute("SELECT frames_b64 FROM files WHERE id = ?", (file_id,)).fetchone()
+    con.close()
+    try:
+        frames = json.loads(row["frames_b64"]) if row and row["frames_b64"] else []
+        data = base64.b64decode(frames[index]) if 0 <= index < len(frames) and frames[index] else None
+    except (TypeError, ValueError, binascii.Error):
+        data = None
+    if not data:
+        raise HTTPException(status_code=404, detail="no frame")
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/media/{file_id}")

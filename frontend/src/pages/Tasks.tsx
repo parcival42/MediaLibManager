@@ -266,8 +266,8 @@ function EnrichmentBlock() {
             <div className="mt-1.5 text-[11px] text-ink-3">
               <div className="flex items-baseline justify-between gap-4">
                 <span className="font-medium text-ink-2">
-                  Phase {data.frontier_stage + 1}/3 ({t(`enrich_phase_${data.frontier_stage}`)}).{' '}
-                  Progress: {(data.phase_done ?? 0).toLocaleString()} / {(data.phase_total ?? 0).toLocaleString()}
+                  {t('enrich_phase_label')} {data.frontier_stage + 1}/3 ({t(`enrich_phase_${data.frontier_stage}`)}).{' '}
+                  {t('enrich_phase_progress')}: {(data.phase_done ?? 0).toLocaleString()} / {(data.phase_total ?? 0).toLocaleString()}
                 </span>
                 {data.eta_seconds !== null && (
                   <span className="shrink-0 font-medium text-ink-2">
@@ -381,23 +381,21 @@ const PAGE_SIZE = 50
 
 export default function Tasks() {
   const { t } = useI18n()
-  const { data } = useQuery<Task[]>({
-    queryKey: ['tasks'],
-    queryFn: () => api<Task[]>(`/api/tasks?limit=${PAGE_SIZE}`),
+  // "Load more" grows the one polled window instead of fetching a separate
+  // older page by timestamp: new tasks shift a fixed first page, which with
+  // a second cursor-based list left gaps or duplicate rows between the two.
+  const [pages, setPages] = useState(1)
+  const limit = PAGE_SIZE * pages
+  const { data, isFetching } = useQuery<Task[]>({
+    queryKey: ['tasks', limit],
+    queryFn: () => api<Task[]>(`/api/tasks?limit=${limit}`),
+    placeholderData: (prev) => prev,
     // Poll briskly while anything is active, then idle back to a slow refresh.
     refetchInterval: (query) =>
       query.state.data?.some((x) => ACTIVE.has(x.status)) ? 1500 : 8000,
   })
-
-  // Older history pages, fetched on demand via "load more" -- kept separate
-  // from the polled first page so a routine poll never re-triggers pagination
-  // state or duplicates rows.
-  const [olderHistory, setOlderHistory] = useState<Task[]>([])
-  const [loadingMore, setLoadingMore] = useState(false)
-  // null until a "load more" page has been fetched -- until then, whether
-  // there's more depends on whether the (still-polling) first page was full.
-  const [moreAfterOlder, setMoreAfterOlder] = useState<boolean | null>(null)
-  const hasMore = moreAfterOlder ?? (data?.length ?? 0) >= PAGE_SIZE
+  const loadingMore = isFetching && (data?.length ?? 0) < limit && pages > 1
+  const hasMore = (data?.length ?? 0) >= limit
 
   const running = data?.filter((x) => x.status === 'running') ?? []
   const queued = (data?.filter((x) => x.status === 'queued') ?? []).sort(
@@ -405,20 +403,9 @@ export default function Tasks() {
   )
   const queue = [...running, ...queued]
   // /api/tasks is already ordered newest-first, which is what history wants.
-  const history = [...(data?.filter((x) => !ACTIVE.has(x.status)) ?? []), ...olderHistory]
+  const history = data?.filter((x) => !ACTIVE.has(x.status)) ?? []
 
-  const loadMore = async () => {
-    const oldest = history.at(-1)?.created_at
-    if (oldest === undefined) return
-    setLoadingMore(true)
-    try {
-      const more = await api<Task[]>(`/api/tasks?limit=${PAGE_SIZE}&before=${oldest}`)
-      setOlderHistory((prev) => [...prev, ...more])
-      setMoreAfterOlder(more.length === PAGE_SIZE)
-    } finally {
-      setLoadingMore(false)
-    }
-  }
+  const loadMore = () => setPages((p) => p + 1)
 
   return (
     <div className="flex h-full flex-col">

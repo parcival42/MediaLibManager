@@ -525,7 +525,7 @@ export default function RenameRulesEditor() {
                   <div className="font-medium text-ink-1">{f.name}</div>
                   <div className="mt-0.5 text-xs text-ink-3">
                     {t(`ren_strip_filter_type_${f.type}`)} &middot; {f.entries.length}{' '}
-                    {f.entries.length === 1 ? 'entry' : 'entries'}
+                    {f.entries.length === 1 ? t('ren_strip_filter_entry') : t('ren_strip_filter_entries_count')}
                   </div>
                 </div>
                 <Button size="sm" variant="subtle" onClick={() => setEditingFilter(f)}>

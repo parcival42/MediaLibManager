@@ -7,6 +7,7 @@ import { Button, EmptyState, PageHeader, Segmented } from '../components/ui'
 import { IconFolder, IconScan, TYPE_ICON_COMP } from '../components/icons'
 import MediaDetail, { type FileItem } from '../components/MediaDetail'
 import DirectoryTree from '../components/DirectoryTree'
+import { useTaskPolling } from '../components/TaskProgress'
 
 interface Member {
   id: number
@@ -21,7 +22,7 @@ interface Member {
   has_thumb?: boolean
   mean_saturation?: number | null
   is_keep: boolean
-  frames?: string[]
+  frame_count?: number
   phash_distance?: number
   frame_distances?: (number | null)[]
   frame_matches?: boolean[]
@@ -36,9 +37,11 @@ interface Group {
   reclaimable: number
 }
 
-interface Task {
-  status: string
-  progress: number
+// Strongest-evidence-first, same as backend api/dedup.py KIND_ORDER.
+const KIND_ORDER = ['exact_image', 'exact_video', 'exact_other', 'visual', 'video', 'deep']
+const kindRank = (k: string) => {
+  const i = KIND_ORDER.indexOf(k)
+  return i === -1 ? KIND_ORDER.length : i
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -51,25 +54,6 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 const FRAME_POS = ['10%', '30%', '50%', '70%', '90%']
-
-/** Poll a task until it reaches a terminal state, then fire `onDone` once. */
-function useTaskPolling(taskId: string | null, onDone: () => void) {
-  const task = useQuery<Task>({
-    queryKey: ['task', taskId],
-    queryFn: () => api<Task>(`/api/tasks/${taskId}`),
-    enabled: !!taskId,
-    refetchInterval: (query) => {
-      const s = query.state.data?.status
-      return s && s !== 'running' && s !== 'queued' ? false : 800
-    },
-  })
-  useEffect(() => {
-    const s = task.data?.status
-    if (s && s !== 'running' && s !== 'queued') onDone()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.data?.status])
-  return task
-}
 
 type SortKey = 'kind' | 'path' | 'size'
 
@@ -116,11 +100,11 @@ export default function Duplicates() {
     if (sort === 'path') {
       return [...groups].sort((a, b) => keepDir(a).localeCompare(keepDir(b)))
     }
-    // 'kind': preserve backend kind order; within the same kind sort by keep-member directory
-    return [...groups].sort((a, b) => {
-      if (a.kind !== b.kind) return 0
-      return keepDir(a).localeCompare(keepDir(b))
-    })
+    // 'kind': strongest evidence first; within the same kind by keep-member directory.
+    // (A comparator returning 0 across kinds isn't transitive and scrambles the order.)
+    return [...groups].sort(
+      (a, b) => kindRank(a.kind) - kindRank(b.kind) || keepDir(a).localeCompare(keepDir(b)),
+    )
   }, [groups, sort])
 
   // 'kind' sort is meaningless when a single type is already filtered — fall back to 'path'.
@@ -134,22 +118,43 @@ export default function Duplicates() {
     setSelected(new Set())
   }, [list.data])
 
+  // Ignored groups were marked "not duplicates" by the user: never count them
+  // as reclaimable and never bulk-select them for deletion.
   const totalReclaimable = useMemo(
-    () => groups.reduce((sum, g) => sum + g.reclaimable, 0),
+    () => groups.reduce((sum, g) => sum + (g.ignored ? 0 : g.reclaimable), 0),
     [groups],
   )
 
-  const toggle = (id: number) =>
+  const groupOfMember = useMemo(() => {
+    const map = new Map<number, Group>()
+    for (const g of groups) for (const m of g.members) map.set(m.id, g)
+    return map
+  }, [groups])
+
+  const toggle = (id: number) => {
+    // Never let a selection cover every copy of a group -- at least one must
+    // survive (the backend enforces the same).
+    if (!selected.has(id)) {
+      const g = groupOfMember.get(id)
+      if (g && g.members.every((m) => m.id === id || selected.has(m.id))) {
+        window.alert(t('dup_last_copy'))
+        return
+      }
+    }
     setSelected((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
+  }
 
   const selectAllButKept = () => {
     const sel = new Set<number>()
-    for (const g of groups) for (const m of g.members) if (!m.is_keep) sel.add(m.id)
+    for (const g of groups) {
+      if (g.ignored) continue
+      for (const m of g.members) if (!m.is_keep) sel.add(m.id)
+    }
     setSelected(sel)
   }
 
@@ -170,7 +175,9 @@ export default function Duplicates() {
     list.refetch()
     setRebuildId(null)
   })
-  const rebuilding = rebuildMut.isPending || rebuildTask.data?.status === 'running'
+  // rebuildId stays set until a terminal status is seen (covers 'queued');
+  // a poll that gave up (isError) must not keep the button disabled.
+  const rebuilding = rebuildMut.isPending || (rebuildId !== null && !rebuildTask.isError)
 
   // Deep-compare toggle. Persisted as a setting (it governs the all-pairs video
   // pass, which is expensive on large unique libraries); changing it takes
@@ -197,11 +204,11 @@ export default function Duplicates() {
       }),
     onSuccess: (d) => setDeleteId(d.task_id),
   })
-  useTaskPolling(deleteId, () => {
+  const deleteTask = useTaskPolling(deleteId, () => {
     list.refetch()
     setDeleteId(null)
   })
-  const deleting = deleteMut.isPending || !!deleteId
+  const deleting = deleteMut.isPending || (!!deleteId && !deleteTask.isError)
 
   const onDelete = () => {
     if (!selected.size) return
@@ -474,7 +481,7 @@ export default function Duplicates() {
           onClick={() => setFrameSrc(null)}
         >
           <img
-            src={`data:image/jpeg;base64,${frameSrc}`}
+            src={frameSrc}
             alt="Frame"
             className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain"
             onClick={(e) => e.stopPropagation()}
@@ -502,7 +509,9 @@ function DuplicateCard({
 }) {
   const Icon = TYPE_ICON_COMP[m.type] ?? TYPE_ICON_COMP.other
   const isVideo = m.type === 'video'
-  const frames = (m.frames ?? []).filter(Boolean)
+  // Frames are served by URL (like thumbnails) instead of inline base64, so
+  // the group list payload stays small.
+  const frames = Array.from({ length: m.frame_count ?? 0 }, (_, i) => `/api/media/${m.id}/frame/${i}`)
   const showStrip = isVideo && frames.length > 0
 
   // Directory portion of the path (filename shown separately above it).
@@ -600,7 +609,7 @@ function DuplicateCard({
             return (
               <img
                 key={i}
-                src={`data:image/jpeg;base64,${f}`}
+                src={f}
                 alt={FRAME_POS[i]}
                 loading="lazy"
                 title={`${FRAME_POS[i]}${dist != null ? ` · Δ${dist}` : ''}`}

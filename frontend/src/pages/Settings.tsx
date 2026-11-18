@@ -70,8 +70,11 @@ function localToUtc(timeLocal: string, daysLocal: number[]): { time: string; day
   const today = new Date()
   const todayLocalIdx = (today.getDay() + 6) % 7 // Mon=0..Sun=6
   const days = new Set<number>()
-  let hours = 0
-  let minutes = 0
+  // With no day selected, still convert the time (anchored on today) instead
+  // of falling back to 00:00 and losing the configured time.
+  const d0 = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m)
+  let hours = d0.getUTCHours()
+  let minutes = d0.getUTCMinutes()
   for (const dayLocal of daysLocal) {
     const delta = (dayLocal - todayLocalIdx + 7) % 7
     const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + delta, h, m)
@@ -294,6 +297,7 @@ function FieldSection({
   onSave,
   busy,
   saved,
+  error,
   children,
 }: {
   fields: { key: string; labelKey: string }[]
@@ -302,6 +306,7 @@ function FieldSection({
   onSave: (e: React.FormEvent) => void
   busy: boolean
   saved: boolean
+  error?: string | null
   children?: ReactNode
 }) {
   const { t } = useI18n()
@@ -313,6 +318,9 @@ function FieldSection({
             <span className="text-xs font-medium text-ink-2">{t(f.labelKey)}</span>
             <Input
               type={f.key === 'media_root' ? 'text' : 'number'}
+              // Without step="any" the browser's form validation rejects
+              // fractional values (0.05, 0.3, 3.0) and blocks submit entirely.
+              step={f.key === 'media_root' ? undefined : 'any'}
               value={(form[f.key] as string | number) ?? ''}
               onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
             />
@@ -324,6 +332,7 @@ function FieldSection({
             {t('save')}
           </Button>
           {saved && <span className="text-sm text-ok">{t('settings_saved')}</span>}
+          {error && <span className="text-sm text-danger">{error}</span>}
         </div>
       </form>
     </Card>
@@ -342,36 +351,57 @@ export default function SettingsPage() {
     if (data) setForm(data)
   }, [data])
 
+  const [saveError, setSaveError] = useState<string | null>(null)
+
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
-    setBusy(true)
     setSaved(false)
-    // Coerce non-string fields back to numbers before sending.
+    setSaveError(null)
+    // Coerce non-string fields back to numbers before sending. An emptied
+    // number field must not silently become 0 (Number('') === 0) -- e.g. a
+    // deep_min_fraction of 0 would make every video match every other one.
+    const invalid: string[] = []
+    const num = (key: string, labelKey: string) => {
+      const raw = form[key]
+      const n = raw === '' || raw === null || raw === undefined ? NaN : Number(raw)
+      if (Number.isNaN(n)) invalid.push(t(labelKey))
+      return n
+    }
     const payload: Settings = {}
     for (const f of ALL_FIELDS) {
-      const v = form[f.key]
-      payload[f.key] = f.key === 'media_root' ? String(v ?? '') : Number(v)
+      payload[f.key] = f.key === 'media_root' ? String(form[f.key] ?? '') : num(f.key, f.labelKey)
     }
     payload.scan_schedule_enabled = Boolean(form.scan_schedule_enabled)
     payload.scan_schedule_time = String(form.scan_schedule_time ?? '03:00')
     payload.scan_schedule_days = Array.isArray(form.scan_schedule_days) ? form.scan_schedule_days : []
     payload.dir_watch_enabled = Boolean(form.dir_watch_enabled)
-    payload.dir_watch_interval_minutes = Number(form.dir_watch_interval_minutes ?? 5)
+    payload.dir_watch_interval_minutes = num('dir_watch_interval_minutes', 'settings_dir_watch_interval')
     payload.scan_schedule_cleanup_enabled = Boolean(form.scan_schedule_cleanup_enabled)
     payload.metadata_auto_strip_enabled = Boolean(form.metadata_auto_strip_enabled)
     payload.stash_enabled = Boolean(form.stash_enabled)
     payload.stash_url = String(form.stash_url ?? '').trim()
     payload.stash_api_key = String(form.stash_api_key ?? '').trim()
     payload.stash_media_path = String(form.stash_media_path ?? '').trim()
-    payload.stash_scan_delay_minutes = Number(form.stash_scan_delay_minutes ?? 5)
-    const updated = await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) })
-    setForm(updated)
-    setSaved(true)
-    setBusy(false)
+    payload.stash_scan_delay_minutes = num('stash_scan_delay_minutes', 'settings_stash_delay')
+    if (invalid.length) {
+      setSaveError(`${t('settings_invalid_fields')}: ${invalid.join(', ')}`)
+      return
+    }
+    setBusy(true)
+    try {
+      const updated = await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) })
+      setForm(updated)
+      setSaved(true)
+    } catch (err) {
+      setSaveError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const selectSection = (key: SectionKey) => {
     setSaved(false)
+    setSaveError(null)
     setSection(key)
   }
 
@@ -405,6 +435,7 @@ export default function SettingsPage() {
               onSave={save}
               busy={busy}
               saved={saved}
+              error={saveError}
             >
               <ScheduleFields form={form} setForm={setForm} />
               <DirWatchFields form={form} setForm={setForm} />
@@ -418,16 +449,17 @@ export default function SettingsPage() {
               onSave={save}
               busy={busy}
               saved={saved}
+              error={saveError}
             />
           )}
           {section === 'rename' && <RenameRulesEditor />}
           {section === 'metadata' && (
-            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved}>
+            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved} error={saveError}>
               <AutoStripFields form={form} setForm={setForm} />
             </FieldSection>
           )}
           {section === 'stash' && (
-            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved}>
+            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved} error={saveError}>
               <StashFields form={form} setForm={setForm} />
             </FieldSection>
           )}

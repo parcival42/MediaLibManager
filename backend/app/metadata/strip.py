@@ -214,19 +214,37 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
                 _record_history(con, path, "skipped", "skipped", None, "error", f"strip failed: {exc}")
                 continue
 
-            duration_check, phash_check = _check_integrity(
-                path, f["duration"], before_fmt, json.loads(f["frame_hashes"]),
-            )
-            ok = duration_check == "ok" and phash_check == "ok"
+            # Everything between the strip and the decision is guarded: any
+            # unexpected exception (PIL, OSError, bad JSON, ...) must still end
+            # in a restore from the backup and a history entry, and must not
+            # abort the rest of the batch with the file left unverified.
+            new_stat = new_md5 = None
+            duration_check = phash_check = "fail: not checked"
+            try:
+                duration_check, phash_check = _check_integrity(
+                    path, f["duration"], before_fmt, json.loads(f["frame_hashes"]),
+                )
+                if duration_check == "ok" and phash_check == "ok":
+                    new_stat = os.stat(path)
+                    new_md5 = tools.md5sum(path)
+            except Exception as exc:  # noqa: BLE001 - see comment above
+                phash_check = f"fail: {exc}"
+                new_stat = None
+            ok = new_stat is not None
 
             if ok:
                 try:
                     os.remove(backup_path)
                 except OSError:
                     pass
+                # exiftool writes a new file: refresh inode and mtime as well,
+                # or the next scan sees a "changed" file and rename detection
+                # can't match it by inode later.
                 con.execute(
-                    "UPDATE files SET has_title_comment = 0, size = ?, md5 = ? WHERE id = ?",
-                    (os.path.getsize(path), tools.md5sum(path), fid),
+                    "UPDATE files SET has_title_comment = 0, size = ?, md5 = ?, mtime = ?, "
+                    "st_dev = ?, st_ino = ? WHERE id = ?",
+                    (new_stat.st_size, new_md5, new_stat.st_mtime,
+                     new_stat.st_dev, new_stat.st_ino, fid),
                 )
                 con.commit()
                 stripped += 1

@@ -2,8 +2,10 @@
 
 Every pass turns pairwise "is a near-duplicate of" relations into connected
 components via union-find (``DSU``). Each pass takes an ``exclude`` set of file
-ids that were already claimed by an earlier (stronger) pass, so a file ends up
-in at most one group — no file is reported twice.
+ids already claimed by an earlier (stronger) pass. One representative per
+earlier group stays available (see ``rebuild``), so a file similar to a member
+of an exact group can still be found; that representative may then appear in
+two groups.
 
 Candidate search per pass:
 
@@ -11,13 +13,15 @@ Candidate search per pass:
   product on large libraries; see ``bktree``).
 * **Video 5-frame** compares the five fixed-position frame pHashes, gated by a
   duration tolerance; a duration-sorted sliding window keeps it cheap.
-* **Deep compare** compares the start/end edge blocks (one pHash per second).
-  All-pairs within each block, no duration filter — this is what catches
-  re-encoded or trimmed copies whose fixed sample positions no longer line up.
-  Only the (smaller) set of files not yet grouped reaches this pass.
+* **Deep compare** compares the start/end edge blocks (one pHash per second),
+  no duration filter — this is what catches re-encoded or trimmed copies whose
+  fixed sample positions no longer line up. Candidate pairs come from BK-trees
+  over the individual frame hashes; frames shared by many videos (intros,
+  blank frames) are dropped first.
 """
 import json
 import sqlite3
+from collections import Counter
 
 from .bktree import BKTree, DSU, hamming, parse_hash
 
@@ -139,6 +143,16 @@ def _block_matches(a: list[int], b: list[int], threshold: int, min_fraction: flo
     return hits / len(a) >= min_fraction
 
 
+# A frame hash shared exactly by more than this many videos (absolute floor /
+# fraction of the pass) is a common studio intro/outro or a blank frame; it
+# says nothing about two videos being the same and, left in, transitively
+# chains unrelated videos into one huge group.
+_COMMON_HASH_MIN = 5
+_COMMON_HASH_FRACTION = 0.01
+# Fewer informative frames than this in a block: too little evidence.
+_MIN_BLOCK_FRAMES = 3
+
+
 def find_deep_groups(
     con: sqlite3.Connection,
     threshold: int,
@@ -146,6 +160,7 @@ def find_deep_groups(
     exclude: set[int],
     ignore_pairs: set[tuple[int, int]],
     scope: tuple[str, list] | None = None,
+    check_cancelled=None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'video' AND edge_hashes IS NOT NULL"
     params: list = []
@@ -167,11 +182,43 @@ def find_deep_groups(
         if start or end:
             vids.append((r["id"], start, end))
 
+    # Drop uninformative frames (see _COMMON_HASH_*): count in how many
+    # videos each exact hash occurs.
+    freq: Counter[int] = Counter()
+    for _, start, end in vids:
+        freq.update(set(start) | set(end))
+    common_limit = max(_COMMON_HASH_MIN, int(len(vids) * _COMMON_HASH_FRACTION))
+
+    def informative(block: list[int]) -> list[int]:
+        kept = [h for h in block if freq[h] <= common_limit]
+        return kept if len(kept) >= _MIN_BLOCK_FRAMES else []
+
+    vids = [(vid, informative(s), informative(e)) for vid, s, e in vids]
+    vids = [v for v in vids if v[1] or v[2]]
+
+    # Candidate pairs via BK-trees over the individual frame hashes instead of
+    # comparing every pair of videos (O(n^2) block compares took hours on
+    # large libraries): only videos sharing at least one near frame in the
+    # same block can match at all.
+    start_tree, end_tree = BKTree(), BKTree()
+    for idx, (_, start, end) in enumerate(vids):
+        for h in set(start):
+            start_tree.add(h, idx)
+        for h in set(end):
+            end_tree.add(h, idx)
+
     dsu = DSU()
-    n = len(vids)
-    for i in range(n):
-        id_i, start_i, end_i = vids[i]
-        for j in range(i + 1, n):
+    for i, (id_i, start_i, end_i) in enumerate(vids):
+        if check_cancelled and i % 100 == 0:
+            check_cancelled()
+        candidates: set[int] = set()
+        for h in set(start_i):
+            candidates.update(start_tree.query(h, threshold))
+        for h in set(end_i):
+            candidates.update(end_tree.query(h, threshold))
+        for j in candidates:
+            if j <= i:
+                continue
             id_j, start_j, end_j = vids[j]
             pair = (min(id_i, id_j), max(id_i, id_j))
             if pair in ignore_pairs:

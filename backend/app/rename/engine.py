@@ -132,12 +132,10 @@ def invalidate_recent_previews() -> None:
 
 # A starter rule (directory name + resolution + cleaned-up original filename),
 # so a fresh install doesn't start with an empty rule editor.
+# Order matters: the rule applies its filters in list order, and "Scene Tags"
+# must run before "Separators" -- once "." has become " ", tags like "H.264"
+# or "DD5.1" no longer match.
 _PREDEFINED_FILTERS = [
-    {
-        "name": "Separators",
-        "type": "replace_chars",
-        "entries": [{"from": ".", "to": " "}, {"from": "_", "to": " "}],
-    },
     {
         "name": "Scene Tags",
         "type": "strings",
@@ -149,6 +147,11 @@ _PREDEFINED_FILTERS = [
             "AAC", "MP3", "AC3", "DD5.1",
             "MP4", "MKV", "AVI", "WMV",
         ],
+    },
+    {
+        "name": "Separators",
+        "type": "replace_chars",
+        "entries": [{"from": ".", "to": " "}, {"from": "_", "to": " "}],
     },
 ]
 
@@ -439,6 +442,13 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
     return result
 
 
+FORBIDDEN_NAME_CHARS = ("/", "\\", "\0")
+
+
+def is_valid_filename(name: str) -> bool:
+    return bool(name) and name not in (".", "..") and not any(c in name for c in FORBIDDEN_NAME_CHARS)
+
+
 def rename_one(con, fid: int, path: str, target: str, ctx) -> str:
     """Rename one file to ``target`` on disk and update its DB path.
 
@@ -451,6 +461,13 @@ def rename_one(con, fid: int, path: str, target: str, ctx) -> str:
     old_path = Path(path)
     directory = old_path.parent
     current_name = old_path.name
+
+    # A target must be a plain name in the same directory: "/" (from a rule
+    # literal, separator or replace filter) would move the file into another
+    # directory, ".." even out of the media root.
+    if not is_valid_filename(target):
+        ctx.log(f"ERROR renaming {current_name}: invalid target name {target!r}")
+        return "error"
 
     def taken(name: str) -> bool:
         if name == current_name:

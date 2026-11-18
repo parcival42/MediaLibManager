@@ -54,7 +54,8 @@ class ToolError(RuntimeError):
     """An external tool was unavailable or returned an error."""
 
 
-def _run(cmd: list[str], timeout: int, binary: bool = False) -> bytes | str:
+def _run(cmd: list[str], timeout: int, binary: bool = False,
+         ok_codes: tuple[int, ...] = (0,)) -> bytes | str:
     try:
         proc = subprocess.run(
             cmd,
@@ -66,7 +67,9 @@ def _run(cmd: list[str], timeout: int, binary: bool = False) -> bytes | str:
         raise ToolError(f"{cmd[0]} not found")
     except subprocess.TimeoutExpired:
         raise ToolError(f"{cmd[0]} timed out")
-    if proc.returncode != 0:
+    except OSError as exc:  # e.g. E2BIG for an overly long argument list
+        raise ToolError(f"{cmd[0]} could not be started: {exc}")
+    if proc.returncode not in ok_codes:
         err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
         raise ToolError(f"{cmd[0]} failed: {err[-1] if err else proc.returncode}")
     return proc.stdout if binary else proc.stdout.decode("utf-8", "replace")
@@ -156,6 +159,9 @@ def has_title_or_comment(path: str) -> bool:
 _DISPLAY_TAGS = ("Title", "Comment")
 
 
+_READ_CHUNK = 200  # paths per exiftool call in read_title_comment
+
+
 def read_title_comment(paths: list[str]) -> dict[str, list[dict]]:
     """Read the Title/Comment values for many files in one exiftool process.
 
@@ -168,11 +174,19 @@ def read_title_comment(paths: list[str]) -> dict[str, list[dict]]:
     """
     if not paths:
         return {}
-    out = _run(["exiftool", "-j", "-Title", "-Comment", *paths], PROBE_TIMEOUT)
-    try:
-        records = json.loads(out)
-    except json.JSONDecodeError:
-        raise ToolError("exiftool returned no parseable output")
+    # Chunked: one call for thousands of paths would exceed the argument
+    # length limit (E2BIG) and share a single timeout. Exit code 1 only means
+    # some file in the chunk failed; the JSON for the others is still valid.
+    records: list[dict] = []
+    for i in range(0, len(paths), _READ_CHUNK):
+        chunk = paths[i:i + _READ_CHUNK]
+        out = _run(["exiftool", "-j", "-Title", "-Comment", *chunk], PROBE_TIMEOUT, ok_codes=(0, 1))
+        if not out.strip():
+            continue
+        try:
+            records.extend(json.loads(out))
+        except json.JSONDecodeError:
+            raise ToolError("exiftool returned no parseable output")
 
     result: dict[str, list[dict]] = {}
     for rec in records:
@@ -203,7 +217,10 @@ def strip_title_comment(path: str, size: int | None = None) -> str:
     """
     backup = f"{path}_original"
     if os.path.exists(backup):
-        os.remove(backup)  # stale leftover from a crashed earlier run
+        # Left over from an earlier run that crashed mid-verification: it may
+        # be the only intact copy, so never delete it automatically.
+        raise ToolError(f"backup {os.path.basename(backup)} already exists; "
+                        "check it and remove or restore it manually")
     _run(
         ["exiftool", "-P", "-m", "-api", "LargeFileSupport=1", "-Title=", "-Comment=", path],
         strip_timeout(size),

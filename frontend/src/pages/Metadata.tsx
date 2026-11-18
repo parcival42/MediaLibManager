@@ -6,6 +6,7 @@ import { formatSize, formatDuration } from '../utils'
 import { Button, EmptyState, PageHeader } from '../components/ui'
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
+import { useTaskPolling } from '../components/TaskProgress'
 
 interface MetaField {
   name: string
@@ -30,30 +31,6 @@ interface HistoryItem {
   phash_check: string
   status: string
   errormsg: string | null
-}
-
-interface Task {
-  status: string
-  progress: number
-}
-
-/** Poll a task until it reaches a terminal state, then fire `onDone` once. */
-function useTaskPolling(taskId: string | null, onDone: () => void) {
-  const task = useQuery<Task>({
-    queryKey: ['task', taskId],
-    queryFn: () => api<Task>(`/api/tasks/${taskId}`),
-    enabled: !!taskId,
-    refetchInterval: (query) => {
-      const s = query.state.data?.status
-      return s && s !== 'running' && s !== 'queued' ? false : 800
-    },
-  })
-  useEffect(() => {
-    const s = task.data?.status
-    if (s && s !== 'running' && s !== 'queued') onDone()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.data?.status])
-  return task
 }
 
 const STATUS_BADGE: Record<string, string> = {
@@ -121,7 +98,9 @@ export default function Metadata() {
     history.refetch()
     setStripId(null)
   })
-  const stripping = stripMut.isPending || stripTask.data?.status === 'running'
+  // stripId stays set until a terminal status (covers 'queued'); a poll that
+  // gave up must not keep the button disabled.
+  const stripping = stripMut.isPending || (stripId !== null && !stripTask.isError)
 
   const onStrip = () => {
     if (!selected.size) return

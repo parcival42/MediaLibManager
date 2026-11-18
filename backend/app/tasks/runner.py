@@ -22,6 +22,7 @@ import queue
 import threading
 import time
 import uuid
+from collections import deque
 
 from .. import config, db
 
@@ -40,6 +41,34 @@ _worker_lock = threading.Lock()
 # Idle gate: cleared while a task runs so the enrichment worker yields to it.
 _idle = threading.Event()
 _idle.set()
+
+# Enrichment leases. Checking ``_idle`` once per batch is not enough: a task
+# could start while the enrichment pool is still working through up to a
+# few dozen files, and both would then touch the same files (a scan
+# resetting a row the worker is about to overwrite, a rename moving a file
+# mid-ffprobe). Each enrichment step takes a lease via ``try_begin_enrich``;
+# ``_run_one`` closes the gate and waits until all leases are returned
+# before the task body runs.
+_enrich_cond = threading.Condition()
+_enrich_inflight = 0
+
+
+def try_begin_enrich() -> bool:
+    """Take an enrichment lease; ``False`` if a task is (about to start)
+    running, in which case the caller must skip the file for now."""
+    global _enrich_inflight
+    with _enrich_cond:
+        if not _idle.is_set():
+            return False
+        _enrich_inflight += 1
+        return True
+
+
+def end_enrich() -> None:
+    global _enrich_inflight
+    with _enrich_cond:
+        _enrich_inflight -= 1
+        _enrich_cond.notify_all()
 
 # Cooperative cancellation.
 _cancel_lock = threading.Lock()
@@ -73,16 +102,47 @@ class TaskContext:
     """Passed to the task callable so it can report progress and log lines, and
     observe cooperative cancellation."""
 
+    # Log/progress are buffered and written at most this often: tasks call
+    # them per file, and a DB connect + full-log rewrite per call made large
+    # batches (tens of thousands of renames) noticeably slower. ``flush`` is
+    # forced before the task's terminal status is written.
+    _WRITE_INTERVAL = 0.5  # seconds
+    _MAX_LINES = 300
+
     def __init__(self, task_id: str):
         self.task_id = task_id
-        self._lines: list[str] = []
+        self._lines: deque[str] = deque(maxlen=self._MAX_LINES)
+        self._log_dirty = False
+        self._progress: float | None = None
+        self._last_write = 0.0
+        self._lock = threading.Lock()
 
     def log(self, message: str) -> None:
-        self._lines.append(message)
-        _update(self.task_id, log="\n".join(self._lines[-300:]))
+        with self._lock:
+            self._lines.append(message)
+            self._log_dirty = True
+        self._maybe_flush()
 
     def progress(self, percent: float) -> None:
-        _update(self.task_id, progress=round(percent, 1))
+        with self._lock:
+            self._progress = round(percent, 1)
+        self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        if time.monotonic() - self._last_write >= self._WRITE_INTERVAL:
+            self.flush()
+
+    def flush(self) -> None:
+        with self._lock:
+            cols: dict = {}
+            if self._log_dirty:
+                cols["log"] = "\n".join(self._lines)
+                self._log_dirty = False
+            if self._progress is not None:
+                cols["progress"] = self._progress
+                self._progress = None
+            self._last_write = time.monotonic()
+        _update(self.task_id, **cols)
 
     @property
     def cancelled(self) -> bool:
@@ -113,6 +173,42 @@ def enqueue(task_id: str, fn) -> None:
     one task at a time, in submission order."""
     _ensure_worker()
     _queue.put((task_id, fn))
+
+
+def run_and_wait(task_type: str, params: dict, fn, timeout: float):
+    """Run ``fn(ctx)`` as a regular queued task and block until it finished.
+
+    For request handlers that need the outcome synchronously but must still
+    be serialized with every other file-changing task. Returns ``fn``'s
+    result or re-raises its exception. If the task hasn't finished within
+    ``timeout`` (queue busy), it is cancelled and ``TimeoutError`` raised.
+    """
+    task_id = create_task(task_type, params)
+    finished = threading.Event()
+    outcome: dict = {}
+
+    def wrapper(ctx):
+        try:
+            outcome["result"] = fn(ctx)
+            return outcome["result"]
+        except BaseException as exc:
+            outcome["error"] = exc
+            raise
+        finally:
+            finished.set()
+
+    enqueue(task_id, wrapper)
+    if not finished.wait(timeout):
+        with _cancel_lock:
+            started = task_id == _running_task_id
+        if not started and request_cancel(task_id) == "cancelled":
+            raise TimeoutError(task_id)
+        # Already running (or it started in the meantime): its effect is
+        # happening, so report the real outcome instead of a timeout.
+        finished.wait()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("result")
 
 
 def request_cancel(task_id: str) -> str | None:
@@ -187,13 +283,18 @@ def _run_one(task_id: str, fn) -> None:
         _update(task_id, status="cancelled", ended_at=time.time())
         return
 
-    _idle.clear()
+    # Close the gate under the lease lock so no new enrichment step can begin,
+    # then wait for the ones in flight (a long MD5 can take a while).
+    with _enrich_cond:
+        _idle.clear()
+        _enrich_cond.wait_for(lambda: _enrich_inflight == 0)
     _update(task_id, status="running", started_at=time.time())
     ctx = TaskContext(task_id)
     try:
         try:
             result = fn(ctx) or {}
         finally:
+            ctx.flush()
             # Any scan that actually started (done/error/cancelled alike) may
             # have inserted or flagged files. Bumped *before* the status below
             # flips to a terminal state, so a client that sees "done" and
@@ -217,6 +318,7 @@ def _run_one(task_id: str, fn) -> None:
         _update(task_id, status="cancelled", ended_at=time.time())
     except Exception as exc:  # noqa: BLE001 - surfaced to the user via the task log
         ctx.log(f"ERROR: {exc}")
+        ctx.flush()
         _update(task_id, status="error", ended_at=time.time())
     finally:
         with _cancel_lock:

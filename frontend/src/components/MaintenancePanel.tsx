@@ -8,11 +8,12 @@
  * Embedded on the Settings page, mirroring RenameRulesEditor's role as a
  * self-contained settings-section component.
  */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
 import { Button, Card } from './ui'
+import { useTaskPolling } from './TaskProgress'
 
 interface Stats {
   total: number
@@ -33,30 +34,6 @@ interface BackfillResult {
 interface IgnoreStats {
   pairs: number
   groups: number
-}
-
-interface Task<R> {
-  status: string
-  progress: number
-  result?: R
-}
-
-function useTaskPolling<R>(taskId: string | null, onDone: (task: Task<R> | undefined) => void) {
-  const task = useQuery<Task<R>>({
-    queryKey: ['task', taskId],
-    queryFn: () => api<Task<R>>(`/api/tasks/${taskId}`),
-    enabled: !!taskId,
-    refetchInterval: (query) => {
-      const s = query.state.data?.status
-      return s && s !== 'running' && s !== 'queued' ? false : 800
-    },
-  })
-  useEffect(() => {
-    const s = task.data?.status
-    if (s && s !== 'running' && s !== 'queued') onDone(task.data)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.data?.status])
-  return task
 }
 
 export default function MaintenancePanel() {
@@ -81,7 +58,7 @@ export default function MaintenancePanel() {
     stats.refetch()
     setCleanupTaskId(null)
   })
-  const cleaning = cleanupMut.isPending || cleanupTask.data?.status === 'running'
+  const cleaning = cleanupMut.isPending || (cleanupTaskId !== null && !cleanupTask.isError)
 
   const onCleanup = () => {
     if (!window.confirm(t('maint_cleanup_confirm'))) return
@@ -103,7 +80,7 @@ export default function MaintenancePanel() {
     stats.refetch()
     setBackfillTaskId(null)
   })
-  const backfilling = backfillMut.isPending || backfillTask.data?.status === 'running'
+  const backfilling = backfillMut.isPending || (backfillTaskId !== null && !backfillTask.isError)
   const pending = stats.data?.color_backfill_pending ?? 0
 
   // Ignored duplicate groups ("Ignore group" action in the duplicates view).

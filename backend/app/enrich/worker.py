@@ -114,7 +114,23 @@ def _do_stage(row) -> tuple[int, dict]:
 
 
 def _process_one(row) -> None:
-    """Advance a single file by one stage and persist the outcome."""
+    """Advance a single file by one stage and persist the outcome.
+
+    Holds an enrichment lease (``runner.try_begin_enrich``) for the whole
+    step, so no task can start touching files mid-step; if a task is about to
+    run, the file is simply left for a later cycle.
+    """
+    if not runner.try_begin_enrich():
+        return
+    try:
+        _process_one_leased(row)
+    except Exception:  # noqa: BLE001 - e.g. "database is locked" on the write
+        log.exception("enrichment step failed for file id %s", row["id"])
+    finally:
+        runner.end_enrich()
+
+
+def _process_one_leased(row) -> None:
     global _current_file
     _current_file = os.path.relpath(row["path"], str(paths.media_root()))
     src_stage = row["enrich_stage"]
@@ -131,12 +147,23 @@ def _process_one(row) -> None:
         cols = {"enrich_status": "error", "error": str(exc)[:ERROR_MAX],
                 "enriched_at": time.time()}
 
+    # Only write if the row is still in the state this step started from: a
+    # manual "reprocess"/retry (API, not gated by the lease) may have reset it
+    # meanwhile, and overwriting that would store results for stale content.
     assignments = ", ".join(f"{k} = ?" for k in cols)
     con = db.connect()
-    con.execute(f"UPDATE files SET {assignments} WHERE id = ?",
-                (*cols.values(), row["id"]))
-    con.commit()
-    con.close()
+    try:
+        cur = con.execute(
+            f"UPDATE files SET {assignments} WHERE id = ? AND path = ? "
+            "AND enrich_stage = ? AND enrich_status = 'pending'",
+            (*cols.values(), row["id"], row["path"], src_stage),
+        )
+        con.commit()
+        written = cur.rowcount > 0
+    finally:
+        con.close()
+    if not written:
+        return
     # Stage 0 fills in width/height/duration, which rename rules depend on.
     if succeeded and src_stage == 0:
         db.bump_files_generation()
@@ -158,13 +185,17 @@ def _claim_batch(limit: int) -> list:
     still-inconsistent file for another attempt regardless.
     """
     settle_seconds = max(0, int(config.get("enrich_settle_seconds")))
-    cutoff = time.time() - settle_seconds
+    now = time.time()
+    cutoff = now - settle_seconds
     con = db.connect()
+    # An mtime in the future (wrong clock, copied timestamps) would never get
+    # older than the cutoff; such files are taken right away instead of
+    # staying pending forever.
     rows = con.execute(
         "SELECT id, path, type, enrich_stage, duration, size FROM files "
-        "WHERE present = 1 AND enrich_status = 'pending' AND mtime < ? "
+        "WHERE present = 1 AND enrich_status = 'pending' AND (mtime < ? OR mtime > ?) "
         "ORDER BY enrich_stage ASC, path ASC LIMIT ?",
-        (cutoff, limit),
+        (cutoff, now + 60, limit),
     ).fetchall()
     con.close()
     return rows
@@ -228,7 +259,9 @@ def _loop() -> None:
                     _process_one(row)
             else:
                 with ThreadPoolExecutor(max_workers=worker_count) as pool:
-                    pool.map(_process_one, batch)
+                    # Consume the results so an exception escaping a step is
+                    # logged by the handler below instead of vanishing.
+                    list(pool.map(_process_one, batch))
         except Exception:
             # Per-file failures are already caught in _process_one; this guards
             # the loop itself (e.g. a _claim_batch DB error) so a transient

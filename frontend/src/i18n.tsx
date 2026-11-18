@@ -202,6 +202,16 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   task_type_rename_quick_preview: { de: 'Schnellbearbeitung-Vorschau', en: 'Quick edit preview' },
   task_type_metadata_strip: { de: 'Metadaten entfernen', en: 'Strip metadata' },
   task_type_maintenance_cleanup: { de: 'Datenbank-Cleanup', en: 'Database cleanup' },
+  task_type_maintenance_color_backfill: { de: 'Farbwerte nachberechnen', en: 'Colour backfill' },
+  enrich_phase_label: { de: 'Phase', en: 'Phase' },
+  enrich_phase_progress: { de: 'Fortschritt', en: 'Progress' },
+  ren_strip_filter_entry: { de: 'Eintrag', en: 'entry' },
+  ren_strip_filter_entries_count: { de: 'Einträge', en: 'entries' },
+  dup_last_copy: {
+    de: 'Mindestens eine Datei pro Gruppe muss erhalten bleiben.',
+    en: 'At least one file per group must be kept.',
+  },
+  settings_invalid_fields: { de: 'Ungültige oder leere Felder', en: 'Invalid or empty fields' },
 
   ren_subtitle: {
     de: 'Dateien nach den in den Einstellungen definierten Regeln umbenennen. Vorschau prüfen, dann anwenden.',

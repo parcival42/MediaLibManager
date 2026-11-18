@@ -6,7 +6,8 @@ normal task queue if so. Disabled while ``scan_schedule_enabled`` is false.
 Stage-1 scans are cheap (stat only), so this simply reuses
 the same ``run_inventory_scan`` path the manual "Scan" button uses.
 
-Scheduling is server-local-time, day-of-week based (no cron expressions, no
+Scheduling is UTC-based (the Settings UI converts to and from the browser's
+local time), day-of-week based (no cron expressions, no
 catch-up for days the app was down): every minute, if today's weekday is
 enabled and the scheduler hasn't yet run at or after today's configured time,
 trigger one. Moving the configured time later *after* today's run already
@@ -87,7 +88,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import config, db, paths
 from .maintenance import cleanup
@@ -130,8 +131,14 @@ def _last_scheduled_scan_at() -> float | None:
     the rest of that day.
     """
     con = db.connect()
+    # An errored or cancelled scheduled scan counts as today's attempt too
+    # (as does one still queued/running): otherwise a failing scan (e.g. a
+    # missing media mount) or a user cancel would be re-enqueued -- together
+    # with its cleanup -- every minute until midnight. Only 'interrupted'
+    # (container restart mid-scan) earns a retry.
     rows = con.execute(
-        "SELECT params, created_at FROM tasks WHERE type = 'scan' AND status = 'done' "
+        "SELECT params, created_at FROM tasks WHERE type = 'scan' "
+        "AND status IN ('done', 'error', 'cancelled', 'queued', 'running') "
         "ORDER BY created_at DESC"
     ).fetchall()
     con.close()
@@ -152,13 +159,16 @@ def _is_due(now: datetime) -> bool:
     last = _last_scheduled_scan_at()
     if last is None:
         return True
-    return datetime.fromtimestamp(last) < target
+    return datetime.fromtimestamp(last, tz=timezone.utc) < target
 
 
 def _maybe_trigger() -> None:
     if not config.get("scan_schedule_enabled") or runner.any_task_active():
         return
-    if not _is_due(datetime.now()):
+    # scan_schedule_time/days are stored in UTC (the Settings UI converts
+    # from/to the browser's local time), so compare in UTC regardless of the
+    # container's TZ.
+    if not _is_due(datetime.now(timezone.utc)):
         return
 
     scope = paths.media_root()
@@ -167,7 +177,20 @@ def _maybe_trigger() -> None:
 
     if config.get("scan_schedule_cleanup_enabled"):
         cleanup_task_id = runner.create_task("maintenance_cleanup", {"scheduled": True})
-        runner.enqueue(cleanup_task_id, cleanup.run_cleanup)
+        runner.enqueue(cleanup_task_id, lambda ctx: _cleanup_after_scan(task_id, ctx))
+
+
+def _cleanup_after_scan(scan_task_id: str, ctx) -> dict:
+    """Run the chained cleanup only if the scan it follows succeeded: after a
+    failed or cancelled scan the inventory is incomplete and the cleanup
+    would act on a half-reconciled picture."""
+    con = db.connect()
+    row = con.execute("SELECT status FROM tasks WHERE id = ?", (scan_task_id,)).fetchone()
+    con.close()
+    if not row or row["status"] != "done":
+        ctx.log(f"Skipped: the preceding scheduled scan ended as {row['status'] if row else 'unknown'}.")
+        return {"skipped": True}
+    return cleanup.run_cleanup(ctx)
 
 
 def _poll_dir_batch() -> None:

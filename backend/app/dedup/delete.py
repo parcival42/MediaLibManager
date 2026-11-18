@@ -13,14 +13,47 @@ import time
 from .. import db, paths
 
 
+def _last_copies(con, selected: set[int]) -> dict[int, str]:
+    """Ids (-> path) that must survive so no duplicate group loses every copy.
+
+    For each group whose members are *all* selected, the best copy (same
+    ranking as the UI's "keep": highest resolution, then largest, then
+    oldest) is protected. Guards the backend against a selection that
+    includes the keep card, whatever the UI sends.
+    """
+    if not selected:
+        return {}
+    placeholders = ",".join("?" * len(selected))
+    group_ids = [r["group_id"] for r in con.execute(
+        f"SELECT DISTINCT group_id FROM duplicate_members WHERE file_id IN ({placeholders})",
+        list(selected),
+    ).fetchall()]
+    protected: dict[int, str] = {}
+    for gid in group_ids:
+        members = con.execute(
+            "SELECT f.id, f.path FROM duplicate_members m JOIN files f ON f.id = m.file_id "
+            "WHERE m.group_id = ? "
+            "ORDER BY COALESCE(f.width, 0) * COALESCE(f.height, 0) DESC, "
+            "COALESCE(f.size, 0) DESC, COALESCE(f.mtime, 0) ASC",
+            (gid,),
+        ).fetchall()
+        if members and all(m["id"] in selected for m in members):
+            protected[members[0]["id"]] = members[0]["path"]
+    return protected
+
+
 def run_delete(file_ids: list[int], ctx) -> dict:
     deleted = 0
     errors = 0
     freed = 0
     con = db.connect()
     try:
+        protected = _last_copies(con, set(file_ids))
         for fid in file_ids:
             ctx.raise_if_cancelled()
+            if fid in protected:
+                ctx.log(f"SKIP (last remaining copy of its duplicate group): {protected[fid]}")
+                continue
             row = con.execute(
                 "SELECT path, size FROM files WHERE id = ?", (fid,)
             ).fetchone()
@@ -34,17 +67,20 @@ def run_delete(file_ids: list[int], ctx) -> dict:
                 ctx.log(f"SKIP (outside media root): {path}")
                 continue
             try:
-                if os.path.isfile(path):
+                existed = os.path.isfile(path)
+                if existed:
                     os.remove(path)
-                con.execute(
-                    "INSERT INTO delete_history(path, filename, size, deleted_at) "
-                    "VALUES(?, ?, ?, ?)",
-                    (path, os.path.basename(path), row["size"], time.time()),
-                )
+                    # Only a file actually removed here frees space; one that
+                    # was already gone just loses its stale row.
+                    con.execute(
+                        "INSERT INTO delete_history(path, filename, size, deleted_at) "
+                        "VALUES(?, ?, ?, ?)",
+                        (path, os.path.basename(path), row["size"], time.time()),
+                    )
+                    freed += row["size"] or 0
                 con.execute("DELETE FROM files WHERE id = ?", (fid,))
                 con.commit()
                 deleted += 1
-                freed += row["size"] or 0
             except OSError as exc:
                 errors += 1
                 ctx.log(f"ERROR deleting {path}: {exc}")

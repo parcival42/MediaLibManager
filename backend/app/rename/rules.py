@@ -181,50 +181,91 @@ def build_target_name(rule: dict, assignment_dir: str, file_row: dict, filters_b
     enriched yet — the caller should treat the file as pending, not render a
     name with a blank field.
 
-    The "filename" segment is fed the current stem with the prefix made up of
-    the segments rendered *before* it stripped off first, when present. That
-    keeps the rule idempotent: re-running it on an already-renamed file
-    recovers the original title instead of re-prepending the name/resolution
-    on every run. The prefix is computed from the rule itself, so it works for
-    any segment order/count.
+    The "filename" segment is fed the current stem with the segments rendered
+    *before* it (prefix) and *after* it (suffix) stripped off first, when
+    present. That keeps the rule idempotent: re-running it on an
+    already-renamed file recovers the original title instead of re-adding
+    the name/resolution on every run, for any segment order/count. A stem
+    ending in a collision suffix ("_1") is left alone if the name without it
+    already conforms.
     """
-    segments = rule["segments"]
-    separator = rule.get("separator") or " - "
     current_name = os.path.basename(file_row["path"])
     stem, ext = os.path.splitext(current_name)
+    target = _build_from_stem(rule, assignment_dir, file_row, filters_by_id, stem, ext)
+    if target is None or target == current_name:
+        return target
 
-    rendered: list[str] = []
+    # A previous apply may have resolved a collision with a "_N" suffix. If
+    # the name without that suffix already renders to itself, the file is
+    # conforming and keeps its suffixed name -- otherwise a filter such as
+    # "_" -> " " would turn "Title_1" into "Title 1" on the next run.
+    m = _COLLISION_SUFFIX.match(stem)
+    if m:
+        base = m.group(1)
+        base_target = _build_from_stem(rule, assignment_dir, file_row, filters_by_id, base, ext)
+        if base_target == f"{base}{ext}":
+            return current_name
+    return target
+
+
+_COLLISION_SUFFIX = re.compile(r"^(.+)_(\d+)$")
+
+
+def _render_value(seg: dict, assignment_dir: str, file_row: dict) -> tuple[str, bool]:
+    source = seg.get("source")
+    if source == "literal":
+        return seg.get("text", ""), False
+    if source == "dirname":
+        return _render_dirname(seg, assignment_dir, file_row["path"])
+    if source == "resolution":
+        return _render_resolution(file_row)
+    if source == "duration":
+        return _render_duration(file_row)
+    return "", False
+
+
+def _build_from_stem(rule: dict, assignment_dir: str, file_row: dict, filters_by_id: dict,
+                     stem: str, ext: str) -> str | None:
+    segments = rule["segments"]
+    separator = rule.get("separator") or " - "
+
+    # Non-filename segments don't depend on the stem: render them first, so
+    # the filename segment can strip both what precedes *and* what follows
+    # it from an already-renamed stem (any segment order stays idempotent).
+    values: list[str | None] = []
     missing = False
     for seg in segments:
-        source = seg.get("source")
-        if source == "literal":
-            value, seg_missing = seg.get("text", ""), False
-        elif source == "dirname":
-            value, seg_missing = _render_dirname(seg, assignment_dir, file_row["path"])
-        elif source == "resolution":
-            value, seg_missing = _render_resolution(file_row)
-        elif source == "duration":
-            value, seg_missing = _render_duration(file_row)
-        elif source == "filename":
-            prefix_val = _join(rendered, separator)
-            prefix = prefix_val + separator if prefix_val else ""
-            if prefix and stem.startswith(prefix):
-                raw = stem[len(prefix):]
-            elif prefix_val and stem == prefix_val:
-                # A prior render's filename segment came out empty, so the
-                # separator that would precede it was dropped too (_join
-                # skips empty values) — the stem is just the prefix.
-                raw = ""
-            else:
-                raw = stem
-            value, seg_missing = _render_filename(raw, seg, filters_by_id, file_row), False
-        else:
-            value, seg_missing = "", False
+        if seg.get("source") == "filename":
+            values.append(None)
+            continue
+        value, seg_missing = _render_value(seg, assignment_dir, file_row)
         missing = missing or seg_missing
-        rendered.append(value)
-
+        values.append(value)
     if missing:
         return None
+
+    rendered: list[str] = []
+    for idx, seg in enumerate(segments):
+        if seg.get("source") != "filename":
+            rendered.append(values[idx] or "")
+            continue
+        prefix_val = _join([v or "" for v in values[:idx]], separator)
+        suffix_val = _join([v or "" for v in values[idx + 1:]], separator)
+        raw = stem
+        if prefix_val:
+            if raw.startswith(prefix_val + separator):
+                raw = raw[len(prefix_val + separator):]
+            elif raw == prefix_val:
+                # A prior render's filename segment came out empty, so the
+                # separator that would precede it was dropped too (_join
+                # skips empty values) -- the stem is just the prefix.
+                raw = ""
+        if suffix_val and raw:
+            if raw.endswith(separator + suffix_val):
+                raw = raw[: -len(separator + suffix_val)]
+            elif raw == suffix_val:
+                raw = ""
+        rendered.append(_render_filename(raw, seg, filters_by_id, file_row))
 
     name = _join(rendered, separator)
     return f"{name}{ext}" if name else None

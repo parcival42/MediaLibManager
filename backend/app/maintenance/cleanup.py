@@ -10,6 +10,7 @@ or the stored flag, and actually delete the ones that are gone. Runs as a
 serial task (cooperatively cancellable) since it walks the whole library.
 """
 import os
+import stat
 
 from .. import db
 
@@ -34,6 +35,20 @@ _GUARD_MIN_TOTAL = 50
 _GUARD_MAX_FRACTION = 0.5
 
 
+def _is_gone(path: str) -> bool:
+    """True only if ``path`` definitely doesn't exist (or is no longer a
+    regular file). A permission error or I/O hiccup is *not* "gone" --
+    ``os.path.isfile`` would report False for those too and the row would be
+    deleted for good."""
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return not stat.S_ISREG(st.st_mode)
+
+
 def run_cleanup(ctx) -> dict:
     con = db.connect()
     try:
@@ -43,7 +58,7 @@ def run_cleanup(ctx) -> dict:
 
         for i, r in enumerate(rows, start=1):
             ctx.raise_if_cancelled()
-            if not os.path.isfile(r["path"]):
+            if _is_gone(r["path"]):
                 stale.append(r["id"])
             if i % 1000 == 0:
                 ctx.progress(90 * i / total if total else 90)

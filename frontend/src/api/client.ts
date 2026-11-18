@@ -1,8 +1,10 @@
 /** Tiny JSON fetch helper. Throws on non-2xx with the backend's detail message. */
 export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  // Spread opts first: spreading it after `headers` would let a caller's own
+  // headers replace the merged object and drop Content-Type.
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     ...opts,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
   })
   if (!res.ok) {
     // A 401 on any call means the session is no longer valid (expired, or the

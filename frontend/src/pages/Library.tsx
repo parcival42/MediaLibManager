@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SVGProps } from 'react'
-import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
@@ -8,18 +8,13 @@ import { formatSize } from '../utils'
 import { Button, EmptyState, Input, PageHeader, Segmented, StatusDot } from '../components/ui'
 import { IconAlert, IconScan, IconSearch, TYPE_ICON_COMP } from '../components/icons'
 import MediaDetail, { type FileItem } from '../components/MediaDetail'
+import { useTaskPolling } from '../components/TaskProgress'
 
 interface Page {
   total: number
   offset: number
   limit: number
   items: FileItem[]
-}
-
-interface Task {
-  status: string
-  progress: number
-  result?: Record<string, number>
 }
 
 const PAGE = 100
@@ -82,20 +77,14 @@ export default function Library() {
     mutationFn: () => api<{ task_id: string }>('/api/scan', { method: 'POST', body: JSON.stringify({}) }),
     onSuccess: (data) => setScanTaskId(data.task_id),
   })
-  const scanTask = useQuery<Task>({
-    queryKey: ['task', scanTaskId],
-    queryFn: () => api<Task>(`/api/tasks/${scanTaskId}`),
-    enabled: !!scanTaskId,
-    refetchInterval: (query) => {
-      const s = query.state.data?.status
-      return s === 'done' || s === 'error' ? false : 800
-    },
+  // Shared polling hook: stops on every terminal status (incl. cancelled /
+  // interrupted) and on poll errors. scanTaskId stays set until then, so a
+  // scan waiting in the queue also keeps the button disabled.
+  const scanTask = useTaskPolling(scanTaskId, (data) => {
+    if (data?.status === 'done') list.refetch()
+    setScanTaskId(null)
   })
-  const scanning = scanTask.data?.status === 'running' || scanMut.isPending
-  useEffect(() => {
-    if (scanTask.data?.status === 'done') list.refetch()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanTask.data?.status])
+  const scanning = scanMut.isPending || (scanTaskId !== null && !scanTask.isError)
 
   // --- Virtualized grid (rows of `cols` cards) ---
   const parentRef = useRef<HTMLDivElement>(null)

@@ -94,7 +94,12 @@ if (STATIC_DIR / "index.html").exists():
     def spa_fallback(full_path: str):
         if full_path.startswith("api"):
             raise HTTPException(status_code=404, detail="not found")
-        candidate = STATIC_DIR / full_path
-        if candidate.is_file():
+        # Resolve and require the result to stay inside STATIC_DIR: the ASGI
+        # path is not normalized, so "/../../data/medialib.db" (or an encoded
+        # "%2e%2e") would otherwise serve any file in the container, without
+        # authentication.
+        static_root = STATIC_DIR.resolve()
+        candidate = (static_root / full_path).resolve()
+        if candidate.is_relative_to(static_root) and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(static_root / "index.html")

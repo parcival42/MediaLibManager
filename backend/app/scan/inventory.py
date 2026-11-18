@@ -90,6 +90,23 @@ def run_inventory_scan_batch(scopes: list[Path], ctx=None) -> dict:
     return totals
 
 
+def _find_moved_row(con, key: tuple, scope_str: str) -> int | None:
+    """Id of a row outside ``scope_str`` with the given (dev, ino, size,
+    mtime) whose recorded path is gone from disk -- i.e. the file was moved
+    here from elsewhere. ``None`` if there is no such row."""
+    st_dev, st_ino, size, mtime = key
+    scope_sql, scope_params = db.under_dir(scope_str)
+    rows = con.execute(
+        f"SELECT id, path FROM files WHERE st_dev = ? AND st_ino = ? AND size = ? "
+        f"AND mtime = ? AND NOT {scope_sql}",
+        (st_dev, st_ino, size, mtime, *scope_params),
+    ).fetchall()
+    for r in rows:
+        if not os.path.exists(r["path"]):
+            return r["id"]
+    return None
+
+
 def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
     """Walk and reconcile a single ``scope`` against the database. See
     ``run_inventory_scan_batch`` for the calling convention."""
@@ -98,19 +115,39 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
     log(f"Scanning {scope_str}")
 
     # Phase 1: walk the filesystem.
+    # Anything that could not be read (a directory or file failing with
+    # EACCES, an SMB hiccup, ...) is remembered so the reconcile below does not
+    # mistake it for deleted -- marking it missing would let a later cleanup
+    # drop its rows (and enrichment, ignore pairs) for good. Only "not found"
+    # counts as really gone.
     current: dict[str, os.stat_result] = {}
-    for dirpath, _dirnames, filenames in os.walk(scope):
+    unreadable_dirs: list[str] = []
+    unreadable_files: set[str] = set()
+
+    def on_walk_error(err: OSError) -> None:
+        if not isinstance(err, FileNotFoundError) and err.filename:
+            unreadable_dirs.append(str(err.filename).rstrip("/"))
+            log(f"WARNING: cannot read {err.filename}: {err.strerror}")
+
+    for dirpath, _dirnames, filenames in os.walk(scope, onerror=on_walk_error):
         check_cancelled()
         for fn in filenames:
             p = os.path.join(dirpath, fn)
             try:
                 current[p] = os.stat(p)
-            except OSError:
+            except FileNotFoundError:
                 continue
+            except OSError:
+                unreadable_files.add(p)
         if len(current) % 2000 == 0 and current:
             log(f"Discovered {len(current)} files…")
     mark_walk_done()
     log(f"Found {len(current)} files on disk.")
+
+    def unreadable(p: str) -> bool:
+        return p in unreadable_files or any(
+            p.startswith(d + "/") for d in unreadable_dirs
+        )
 
     # Last chance to bail before any DB writes; the reconciliation below commits
     # as a single transaction and should not be interrupted midway.
@@ -140,7 +177,12 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
         r = by_path[p]
         st = current[p]
         if r["size"] == st.st_size and r["mtime"] == st.st_mtime:
-            con.execute("UPDATE files SET present = 1, last_seen = ? WHERE id = ?", (now, r["id"]))
+            # Refresh the inode too: tools that rewrite a file (exiftool) give
+            # it a new one, and a stale inode breaks rename detection later.
+            con.execute(
+                "UPDATE files SET present = 1, last_seen = ?, st_dev = ?, st_ino = ? WHERE id = ?",
+                (now, st.st_dev, st.st_ino, r["id"]),
+            )
             n_unchanged += 1
         else:
             con.execute(
@@ -160,7 +202,7 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
         r = by_path[p]
         missing_by_key.setdefault((r["st_dev"], r["st_ino"], r["size"], r["mtime"]), []).append(r)
 
-    for p in added:
+    for p in sorted(added):
         st = current[p]
         key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime)
         bucket = missing_by_key.get(key)
@@ -170,6 +212,17 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
             con.execute(
                 "UPDATE files SET path = ?, present = 1, last_seen = ? WHERE id = ?",
                 (p, now, r["id"]),
+            )
+            n_renamed += 1
+            continue
+        # A move from a directory outside this scope (dir-watch scans each
+        # changed directory separately, in any order): same inode/size/mtime
+        # on a row whose recorded path no longer exists on disk.
+        moved = _find_moved_row(con, key, scope_str)
+        if moved is not None:
+            con.execute(
+                "UPDATE files SET path = ?, present = 1, last_seen = ? WHERE id = ?",
+                (p, now, moved),
             )
             n_renamed += 1
         else:
@@ -186,9 +239,15 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
     # deliberately left untouched here -- it means "last confirmed present",
     # not "last scan"; re-stamping it to `now` would make every re-scan show
     # today's date for a file that has been gone for months.
+    n_unreadable = 0
     for p in missing:
+        if unreadable(p):
+            n_unreadable += 1
+            continue
         con.execute("UPDATE files SET present = 0 WHERE id = ?", (by_path[p]["id"],))
         n_removed += 1
+    if n_unreadable:
+        log(f"WARNING: {n_unreadable} known files under unreadable paths were left as they are.")
 
     con.commit()
     con.close()
