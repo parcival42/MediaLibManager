@@ -8,6 +8,7 @@ import {
   Button,
   EmptyState,
   Input,
+  LoadingPane,
   PageHeader,
   Segmented,
   SelectionBar,
@@ -99,24 +100,36 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
   const previewBusy = preview.busy
   const previewFailed = preview.failed
 
-  // Page open / scope switch (force=false) may reuse a recent-enough cached
-  // preview server-side instead of recomputing (see backend's
-  // engine.find_recent_preview) — opening the Rename page repeatedly on an
-  // unchanged library shouldn't re-scan every file every time. The Refresh
-  // button and the apply/manual-rename success paths pass force=true since a
-  // stale answer there would be actively wrong, not just unnecessary work.
-  const startPreview = (force: boolean) => {
-    const params = new URLSearchParams()
+  // A preview is only ever computed on explicit request (the create/refresh
+  // button, or after an apply / manual rename). Page open and scope switch
+  // merely look up a still-valid cached preview for the scope (see backend's
+  // engine.find_recent_preview) and show it; without one the page waits for
+  // the button instead of occupying the task queue unasked.
+  const lookupSeq = useRef(0)
+  const [lookingUp, setLookingUp] = useState(true)
+
+  const refreshPreview = () => {
+    lookupSeq.current++ // a cache lookup still in flight must not replace this run
+    setLookingUp(false)
+    const params = new URLSearchParams({ force: 'true' })
     if (scope) params.set('directory', scope)
-    if (force) params.set('force', 'true')
-    const qs = params.toString()
-    preview.start(() =>
-      api<{ task_id: string }>(`/api/rename/preview${qs ? `?${qs}` : ''}`, { method: 'POST' }),
-    )
+    preview.start(() => api<{ task_id: string }>(`/api/rename/preview?${params}`, { method: 'POST' }))
   }
-  const refreshPreview = () => startPreview(true)
+
   useEffect(() => {
-    startPreview(false)
+    const my = ++lookupSeq.current
+    setLookingUp(true)
+    const qs = scope ? `?directory=${encodeURIComponent(scope)}` : ''
+    api<{ task_id: string | null }>(`/api/rename/preview/recent${qs}`)
+      .then((d) => {
+        if (my === lookupSeq.current) preview.show(d.task_id)
+      })
+      .catch(() => {
+        if (my === lookupSeq.current) preview.show(null)
+      })
+      .finally(() => {
+        if (my === lookupSeq.current) setLookingUp(false)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
 
@@ -272,9 +285,9 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
         actions={
           <>
             {tabs}
-            <Button variant="subtle" onClick={refreshPreview} disabled={previewBusy}>
+            <Button onClick={refreshPreview} disabled={previewBusy || applying}>
               {previewBusy ? <Spinner className="h-3.5 w-3.5" /> : <IconRefresh />}
-              {previewBusy ? t('ren_previewing') : t('ren_refresh')}
+              {previewBusy ? t('ren_previewing') : previewData ? t('ren_refresh') : t('ren_preview_create')}
             </Button>
           </>
         }
@@ -321,12 +334,16 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
         />
       )}
 
-      {previewBusy ? (
+      {lookingUp ? (
+        <LoadingPane />
+      ) : previewBusy ? (
         <div className="flex flex-1 items-center justify-center">
           <TaskProgressPanel percent={preview.percent} activity={preview.activity} />
         </div>
       ) : previewFailed ? (
         <EmptyState text={t('ren_load_error')} />
+      ) : !previewData ? (
+        <EmptyState text={t('ren_no_preview')} />
       ) : renames.length === 0 ? (
         <EmptyState text={t('ren_none')} />
       ) : (

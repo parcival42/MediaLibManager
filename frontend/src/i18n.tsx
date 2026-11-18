@@ -227,6 +227,11 @@ const STRINGS: Record<string, { de: string; en: string }> = {
     en: 'Rename files using the rules defined in Settings. Check the preview, then apply.',
   },
   ren_refresh: { de: 'Vorschau aktualisieren', en: 'Refresh preview' },
+  ren_preview_create: { de: 'Vorschau erstellen', en: 'Create preview' },
+  ren_no_preview: {
+    de: 'Für diesen Bereich gibt es keine aktuelle Vorschau. Erstelle eine, um die vorgeschlagenen Umbenennungen zu sehen.',
+    en: 'There is no current preview for this scope. Create one to see the proposed renames.',
+  },
   ren_previewing: { de: 'Vorschau wird geladen…', en: 'Loading preview…' },
   ren_preview_queued: {
     de: 'Wartet, bis der laufende Task fertig ist…',

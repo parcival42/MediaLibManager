@@ -66,6 +66,18 @@ export function usePreviewTask<R>({ onNewTask }: { onNewTask?: () => void } = {}
       })
   }, [])
 
+  /** Show an already existing task (e.g. a cached preview looked up by the
+   * caller), or clear the view with `null`. Supersedes any start in flight
+   * and cancels the previously shown task if it is still running. */
+  const show = useCallback((id: string | null) => {
+    seq.current++
+    if (taskIdRef.current && taskIdRef.current !== id) cancelTask(taskIdRef.current)
+    taskIdRef.current = id
+    setTaskId(id)
+    setStarting(false)
+    setStartError(null)
+  }, [])
+
   const task = useTaskPolling(taskId, () => {})
   const status = task.data?.status
   const result = useQuery<R>({
@@ -94,5 +106,5 @@ export function usePreviewTask<R>({ onNewTask }: { onNewTask?: () => void } = {}
   const activity =
     status === 'queued' ? t('ren_preview_queued') : task.data?.log?.trim().split('\n').pop() || t('ren_previewing')
 
-  return { taskId, start, result, busy, failed, startError, activity, percent: task.data?.progress ?? 0 }
+  return { taskId, start, show, result, busy, failed, startError, activity, percent: task.data?.progress ?? 0 }
 }

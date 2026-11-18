@@ -244,19 +244,37 @@ def _prune_preview_tasks(task_type: str) -> None:
     con.close()
 
 
-@router.post("/preview")
-def preview_rename(directory: str | None = None, force: bool = False, _: str = Depends(auth.current_user)):
+def _normalize_scope(directory: str | None) -> str | None:
+    """Validate a preview scope; the media root itself maps to ``None``."""
     try:
         scope = paths.resolve_within_root(directory)
     except ValueError:
         raise HTTPException(status_code=400, detail="directory outside media root")
     if not scope.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
-    directory = str(scope) if scope != paths.media_root() else None
+    return str(scope) if scope != paths.media_root() else None
 
-    # `force=False` (page open / scope switch) reuses a recent-enough preview
-    # for this scope instead of recomputing — see engine.find_recent_preview.
-    # `force=True` (the Refresh button) always recomputes and, since the user
+
+@router.get("/preview/recent")
+def recent_preview(directory: str | None = None, _: str = Depends(auth.current_user)):
+    """Look up a still-valid cached preview for the scope without computing one.
+
+    The Rename page calls this on open / scope switch and only shows a cached
+    result; a new preview is computed solely on explicit request (POST
+    /preview). Declared before ``/preview/{task_id}`` so "recent" is not taken
+    for a task id.
+    """
+    return {"task_id": engine.find_recent_preview(_normalize_scope(directory))}
+
+
+@router.post("/preview")
+def preview_rename(directory: str | None = None, force: bool = False, _: str = Depends(auth.current_user)):
+    directory = _normalize_scope(directory)
+
+    # `force=False` reuses a recent-enough preview for this scope instead of
+    # recomputing — see engine.find_recent_preview. (The page itself no longer
+    # uses it: on open it only looks up the cache via GET /preview/recent.)
+    # `force=True` (the create/refresh button) always recomputes and, since the user
     # asked Refresh to fully discard the cache, drops every scope's cached
     # pointer too — not just this one's.
     if not force:
