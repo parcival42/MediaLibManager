@@ -103,6 +103,7 @@ def reenrich_file(file_id: int, _: str = Depends(auth.current_user)):
     con.close()
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="file not found")
+    db.bump_files_generation()  # width/height/duration were cleared
     return {"status": "pending"}
 
 

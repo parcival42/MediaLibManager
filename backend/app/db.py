@@ -5,6 +5,7 @@ covers every planned milestone so that later areas do not require migrations.
 """
 import os
 import sqlite3
+import threading
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("MEDIALIB_DATA", "/data"))
@@ -160,6 +161,39 @@ CREATE TABLE IF NOT EXISTS delete_history (
     deleted_at REAL
 );
 """
+
+
+# Process-local counter bumped whenever the files inventory changes in a way
+# that can change a rename preview: a scan, enrichment filling in
+# width/height/duration, files deleted or marked missing, a manual reset.
+# Consumers (the rename preview cache) compare it instead of subscribing to
+# each of those events. Several enrichment threads bump it concurrently.
+_files_generation = 0
+_files_generation_lock = threading.Lock()
+
+
+def files_generation() -> int:
+    return _files_generation
+
+
+def bump_files_generation() -> None:
+    global _files_generation
+    with _files_generation_lock:
+        _files_generation += 1
+
+
+def under_dir(directory: str, column: str = "path") -> tuple[str, list]:
+    """SQL condition (and its params) matching ``directory`` itself or anything
+    beneath it.
+
+    An exact, case-sensitive prefix comparison instead of ``LIKE``: ``LIKE``
+    treats "_"/"%" in directory names as wildcards and ignores ASCII case, so a
+    scope of "/media/Cat_A" would also match "/media/CatXA/..." or
+    "/media/cat_a/...". ``substr`` counts characters, same as Python's ``len``.
+    """
+    base = directory.rstrip("/")
+    prefix = base + "/"
+    return f"({column} = ? OR substr({column}, 1, ?) = ?)", [base, len(prefix), prefix]
 
 
 def connect() -> sqlite3.Connection:

@@ -62,6 +62,7 @@ def run_cleanup(ctx) -> dict:
             placeholders = ",".join("?" * len(batch))
             con.execute(f"DELETE FROM files WHERE id IN ({placeholders})", batch)
             con.commit()
+            db.bump_files_generation()
 
         # Drop duplicate groups left with fewer than two members (the FK
         # cascade already removed the stale files' own membership rows).

@@ -28,13 +28,13 @@ def find_image_groups(
     grey_cutoff: float,
     exclude: set[int],
     ignore_pairs: set[tuple[int, int]],
-    directory_pattern: str | None = None,
+    scope: tuple[str, list] | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'image' AND phash IS NOT NULL AND phash != ''"
     params: list = []
-    if directory_pattern:
-        where += " AND path LIKE ? ESCAPE '\\'"
-        params.append(directory_pattern)
+    if scope:
+        where += " AND " + scope[0]
+        params += scope[1]
     rows = con.execute(
         f"SELECT id, phash, mean_saturation FROM files WHERE {where}", params
     ).fetchall()
@@ -88,13 +88,13 @@ def find_video_groups(
     duration_tolerance: float,
     exclude: set[int],
     ignore_pairs: set[tuple[int, int]],
-    directory_pattern: str | None = None,
+    scope: tuple[str, list] | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'video' AND frame_hashes IS NOT NULL"
     params: list = []
-    if directory_pattern:
-        where += " AND path LIKE ? ESCAPE '\\'"
-        params.append(directory_pattern)
+    if scope:
+        where += " AND " + scope[0]
+        params += scope[1]
     rows = con.execute(f"SELECT id, duration, frame_hashes FROM files WHERE {where}", params).fetchall()
 
     vids: list[tuple[int, float | None, list[int]]] = []
@@ -145,13 +145,13 @@ def find_deep_groups(
     min_fraction: float,
     exclude: set[int],
     ignore_pairs: set[tuple[int, int]],
-    directory_pattern: str | None = None,
+    scope: tuple[str, list] | None = None,
 ) -> list[list[int]]:
     where = "present = 1 AND type = 'video' AND edge_hashes IS NOT NULL"
     params: list = []
-    if directory_pattern:
-        where += " AND path LIKE ? ESCAPE '\\'"
-        params.append(directory_pattern)
+    if scope:
+        where += " AND " + scope[0]
+        params += scope[1]
     rows = con.execute(f"SELECT id, edge_hashes FROM files WHERE {where}", params).fetchall()
 
     vids: list[tuple[int, list[int], list[int]]] = []

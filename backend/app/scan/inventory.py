@@ -118,10 +118,12 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
 
     con = db.connect()
     # Existing rows within scope (the scope dir itself or anything beneath it).
-    like = scope_str.rstrip(os.sep) + os.sep + "%"
+    # Exact prefix match (db.under_dir): a LIKE here would also pull in rows of
+    # sibling directories like "Cat_A" vs "CatXA" and mark them missing below.
+    scope_sql, scope_params = db.under_dir(scope_str)
     rows = con.execute(
-        "SELECT id, path, size, mtime, st_dev, st_ino FROM files WHERE path = ? OR path LIKE ?",
-        (scope_str, like),
+        f"SELECT id, path, size, mtime, st_dev, st_ino FROM files WHERE {scope_sql}",
+        scope_params,
     ).fetchall()
     by_path = {r["path"]: r for r in rows}
 

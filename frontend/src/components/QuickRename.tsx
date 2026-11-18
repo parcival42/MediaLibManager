@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
@@ -7,6 +7,7 @@ import { Button, EmptyState, Input, PageHeader, Segmented, Spinner } from './ui'
 import { IconFolder } from './icons'
 import DirectoryTree from './DirectoryTree'
 import { TaskProgressPanel, useTaskPolling } from './TaskProgress'
+import { usePreviewTask } from './usePreviewTask'
 
 type QuickMode = 'remove' | 'replace'
 
@@ -38,10 +39,6 @@ interface ApplyResult {
 }
 
 type FlatEntry = { kind: 'dir'; dir: string; items: QuickItem[] } | { kind: 'item'; item: QuickItem }
-
-const cancelTask = (taskId: string) => {
-  api(`/api/tasks/${taskId}/cancel`, { method: 'POST' }).catch(() => {})
-}
 
 export default function QuickRename({ tabs }: { tabs: ReactNode }) {
   const { t } = useI18n()
@@ -78,59 +75,27 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
   }
 
   const [previewParams, setPreviewParams] = useState<QuickParams | null>(null)
-  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null)
-  const previewTaskIdRef = useRef<string | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
-  const startPreviewMut = useMutation({
-    mutationFn: (params: QuickParams) =>
-      api<{ task_id: string }>('/api/rename/quick/preview', {
-        method: 'POST',
-        body: JSON.stringify(params),
-      }),
-  })
+  // Selection belongs to one specific preview list; reset on every new task.
+  const preview = usePreviewTask<{ renames: QuickItem[] }>({ onNewTask: () => setSelected(new Set()) })
+  const resultQuery = preview.result
+  const previewBusy = preview.busy
+  // A rejected start (e.g. 400 "no terms given") is shown next to the form.
+  const previewFailed = preview.failed && !preview.startError
+
   const runPreview = (params: QuickParams) => {
-    const previous = previewTaskIdRef.current
-    startPreviewMut.mutate(params, {
-      onSuccess: (d) => {
-        previewTaskIdRef.current = d.task_id
-        setPreviewTaskId(d.task_id)
-        setPreviewParams(params)
-      },
-    })
-    if (previous) cancelTask(previous)
+    // The snapshot is what apply sends; it's only taken once this task is
+    // the one being shown, so it always describes the list on screen.
+    preview.start(
+      () =>
+        api<{ task_id: string }>('/api/rename/quick/preview', {
+          method: 'POST',
+          body: JSON.stringify(params),
+        }),
+      () => setPreviewParams(params),
+    )
   }
-  useEffect(() => {
-    return () => {
-      if (previewTaskIdRef.current) cancelTask(previewTaskIdRef.current)
-    }
-  }, [])
-
-  const previewTask = useTaskPolling(previewTaskId, () => setSelected(new Set()))
-  const previewStatus = previewTask.data?.status
-  const resultQuery = useQuery<{ renames: QuickItem[] }>({
-    queryKey: ['rename-quick-result', previewTaskId],
-    queryFn: () => api<{ renames: QuickItem[] }>(`/api/rename/preview/${previewTaskId}`),
-    enabled: !!previewTaskId && previewStatus === 'done',
-    staleTime: Infinity,
-  })
-
-  const previewBusy =
-    startPreviewMut.isPending ||
-    (!!previewTaskId && previewStatus === undefined && !previewTask.isError) ||
-    previewStatus === 'queued' ||
-    previewStatus === 'running' ||
-    (previewStatus === 'done' && resultQuery.isLoading)
-  const previewFailed =
-    previewTask.isError ||
-    previewStatus === 'error' ||
-    previewStatus === 'cancelled' ||
-    previewStatus === 'interrupted' ||
-    resultQuery.isError
-  const previewActivity =
-    previewStatus === 'queued'
-      ? t('ren_preview_queued')
-      : previewTask.data?.log?.trim().split('\n').pop() || t('ren_previewing')
 
   const renames = resultQuery.data?.renames ?? []
   const collisionCount = useMemo(() => renames.filter((r) => r.collision).length, [renames])
@@ -186,7 +151,10 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
     setApplyId(null)
     if (previewParams) runPreview(previewParams)
   })
-  const applying = applyMut.isPending || applyTask.data?.status === 'running' || applyTask.data?.status === 'queued'
+  // applyId stays set until the poll sees a terminal status (covers 'queued'
+  // and the window before the first poll returns); a poll that gave up
+  // (isError) never reaches that, so it must not keep the button stuck.
+  const applying = applyMut.isPending || (applyId !== null && !applyTask.isError)
 
   const onApply = () => {
     if (!selected.size || !previewParams) return
@@ -276,8 +244,8 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
               {previewBusy ? t('ren_previewing') : t('ren_quick_preview')}
             </Button>
           </div>
-          {startPreviewMut.isError && (
-            <p className="text-xs text-danger">{(startPreviewMut.error as Error)?.message}</p>
+          {preview.startError && (
+            <p className="text-xs text-danger">{preview.startError.message}</p>
           )}
         </div>
       </div>
@@ -324,7 +292,7 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
 
       {previewBusy ? (
         <div className="flex flex-1 items-center justify-center">
-          <TaskProgressPanel percent={previewTask.data?.progress ?? 0} activity={previewActivity} />
+          <TaskProgressPanel percent={preview.percent} activity={preview.activity} />
         </div>
       ) : previewFailed ? (
         <EmptyState text={t('ren_load_error')} />

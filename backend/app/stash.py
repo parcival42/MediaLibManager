@@ -21,7 +21,7 @@ import threading
 import urllib.error
 import urllib.request
 
-from . import config
+from . import config, paths
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,9 @@ def to_stash_path(path: str) -> str:
     stash_root = (config.get("stash_media_path") or "").rstrip("/")
     if not stash_root:
         return path
-    local_root = str(config.get("media_root") or "").rstrip("/")
+    # The resolved root, same as the paths stored in the DB (a symlinked or
+    # relative media_root setting would otherwise never match them).
+    local_root = str(paths.media_root()).rstrip("/")
     if path == local_root:
         return stash_root
     if local_root and path.startswith(local_root + "/"):
@@ -90,13 +92,13 @@ def scan_directories(directories: set[str]) -> str:
     """Start a Stash scan of ``directories`` (local paths). Returns the job id."""
     dirs = _collapse(directories)
     if len(dirs) > MAX_SCAN_PATHS:
-        dirs = [str(config.get("media_root"))]
-    paths = [to_stash_path(d) for d in dirs]
+        dirs = [str(paths.media_root())]
+    scan_paths = [to_stash_path(d) for d in dirs]
     data = _graphql(
         config.get("stash_url") or "",
         config.get("stash_api_key") or "",
         "mutation($input: ScanMetadataInput!) { metadataScan(input: $input) }",
-        {"input": {"paths": paths}},
+        {"input": {"paths": scan_paths}},
     )
     return str(data.get("metadataScan"))
 

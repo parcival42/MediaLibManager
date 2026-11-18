@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
@@ -7,6 +7,7 @@ import { Button, EmptyState, PageHeader, Segmented, Spinner } from '../component
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
 import { TaskProgressPanel, useTaskPolling } from '../components/TaskProgress'
+import { previewResultKey, usePreviewTask } from '../components/usePreviewTask'
 import QuickRename from '../components/QuickRename'
 
 interface RenameItem {
@@ -84,90 +85,42 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
   // task's own result (see backend/app/rename/engine.py) — the full list is
   // fetched separately once the task is done, so a few thousand renames
   // don't end up sitting in the Tasks history's result column.
-  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null)
-  const previewTaskIdRef = useRef<string | null>(null)
-  const startPreviewMut = useMutation({
-    mutationFn: ({ dir, force }: { dir: string | null; force: boolean }) => {
-      const params = new URLSearchParams()
-      if (dir) params.set('directory', dir)
-      if (force) params.set('force', 'true')
-      const qs = params.toString()
-      return api<{ task_id: string }>(`/api/rename/preview${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  // Selection and filter belong to the list of one specific task; reset them
+  // whenever the shown task changes -- including when the server hands back
+  // an already finished cached preview for a scope, where no status
+  // transition would otherwise signal the switch.
+  const preview = usePreviewTask<PreviewResponse>({
+    onNewTask: () => {
+      setSelected(new Set())
+      setOnlyCollisions(false)
     },
   })
-  const previewTask = useTaskPolling(previewTaskId, () => {
-    setSelected(new Set())
-    setOnlyCollisions(false)
-  })
-  const previewStatus = previewTask.data?.status
-  const previewResultQuery = useQuery<PreviewResponse>({
-    queryKey: ['rename-preview-result', previewTaskId],
-    queryFn: () => api<PreviewResponse>(`/api/rename/preview/${previewTaskId}`),
-    enabled: !!previewTaskId && previewStatus === 'done',
-    // The payload for a given task id never changes on the server once it's
-    // done, so this never needs a background refetch (window focus, etc.) —
-    // and must not get one: apply patches this exact cache entry locally
-    // (see applyTask below), and an automatic refetch would silently
-    // overwrite that patch with the pre-apply snapshot.
-    staleTime: Infinity,
-  })
+  const previewTaskId = preview.taskId
+  const previewBusy = preview.busy
+  const previewFailed = preview.failed
 
-  const cancelPreviewTask = (taskId: string) => {
-    api(`/api/tasks/${taskId}/cancel`, { method: 'POST' }).catch(() => {})
-  }
   // Page open / scope switch (force=false) may reuse a recent-enough cached
   // preview server-side instead of recomputing (see backend's
   // engine.find_recent_preview) — opening the Rename page repeatedly on an
   // unchanged library shouldn't re-scan every file every time. The Refresh
   // button and the apply/manual-rename success paths pass force=true since a
   // stale answer there would be actively wrong, not just unnecessary work.
-  // Either way, an old in-flight preview that's being replaced gets
-  // cancelled — left running it would keep enrichment paused and block real
-  // tasks behind it for no reason.
   const startPreview = (force: boolean) => {
-    const previous = previewTaskIdRef.current
-    startPreviewMut.mutate(
-      { dir: scope, force },
-      {
-        onSuccess: (d) => {
-          previewTaskIdRef.current = d.task_id
-          setPreviewTaskId(d.task_id)
-        },
-      },
+    const params = new URLSearchParams()
+    if (scope) params.set('directory', scope)
+    if (force) params.set('force', 'true')
+    const qs = params.toString()
+    preview.start(() =>
+      api<{ task_id: string }>(`/api/rename/preview${qs ? `?${qs}` : ''}`, { method: 'POST' }),
     )
-    if (previous) cancelPreviewTask(previous)
   }
   const refreshPreview = () => startPreview(true)
   useEffect(() => {
     startPreview(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
-  useEffect(() => {
-    return () => {
-      if (previewTaskIdRef.current) cancelPreviewTask(previewTaskIdRef.current)
-    }
-  }, [])
 
-  const previewStarting =
-    startPreviewMut.isPending || (!!previewTaskId && previewStatus === undefined && !previewTask.isError)
-  const previewBusy =
-    previewStarting ||
-    previewStatus === 'queued' ||
-    previewStatus === 'running' ||
-    (previewStatus === 'done' && previewResultQuery.isLoading)
-  const previewFailed =
-    startPreviewMut.isError ||
-    previewTask.isError ||
-    previewStatus === 'error' ||
-    previewStatus === 'cancelled' ||
-    previewStatus === 'interrupted' ||
-    previewResultQuery.isError
-  const previewActivity =
-    previewStatus === 'queued'
-      ? t('ren_preview_queued')
-      : previewTask.data?.log?.trim().split('\n').pop() || t('ren_previewing')
-
-  const previewData = previewResultQuery.data
+  const previewData = preview.result.data
   const renames = previewData?.renames ?? []
   const pending = previewData?.pending ?? []
   const collisionCount = useMemo(() => renames.filter((r) => r.collision).length, [renames])
@@ -256,7 +209,7 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
     if (renamedIds?.length) {
       const idSet = new Set(renamedIds)
       if (previewTaskId) {
-        queryClient.setQueryData<PreviewResponse>(['rename-preview-result', previewTaskId], (old) =>
+        queryClient.setQueryData<PreviewResponse>(previewResultKey(previewTaskId), (old) =>
           old ? { ...old, renames: old.renames.filter((r) => !idSet.has(r.file_id)) } : old,
         )
       }
@@ -271,7 +224,11 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
     }
     setApplyId(null)
   })
-  const applying = applyMut.isPending || applyTask.data?.status === 'running'
+  // applyId stays set from task creation until the poll sees a terminal
+  // status, so this covers 'queued' (e.g. behind a running scan) and the
+  // window before the first poll returns -- no second apply in between.
+  // A poll that gave up (isError) never reaches onDone; don't stay stuck.
+  const applying = applyMut.isPending || (applyId !== null && !applyTask.isError)
 
   const onApply = () => {
     if (!selected.size) return
@@ -399,7 +356,7 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
 
       {previewBusy ? (
         <div className="flex flex-1 items-center justify-center">
-          <TaskProgressPanel percent={previewTask.data?.progress ?? 0} activity={previewActivity} />
+          <TaskProgressPanel percent={preview.percent} activity={preview.activity} />
         </div>
       ) : previewFailed ? (
         <EmptyState text={t('ren_load_error')} />

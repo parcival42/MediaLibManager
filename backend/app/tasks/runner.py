@@ -50,19 +50,6 @@ _running_task_id: str | None = None
 # _run_one act on what kind of task just completed without a DB round-trip.
 _task_types: dict[str, str] = {}
 
-# Bumped whenever a 'scan' task finishes successfully. Other modules (e.g. the
-# rename preview cache) use this as a cheap "has the file inventory possibly
-# changed" signal instead of subscribing to scan events directly. Written only
-# from the single worker thread, read from request-handling threads — a
-# plain int, no lock needed (worst case a reader sees last generation's value
-# one increment late, which just costs one extra recompute).
-_scan_generation = 0
-
-
-def scan_generation() -> int:
-    return _scan_generation
-
-
 def any_task_active() -> bool:
     return not _idle.is_set()
 
@@ -184,7 +171,7 @@ def _prune_history() -> None:
 
 
 def _run_one(task_id: str, fn) -> None:
-    global _running_task_id, _scan_generation
+    global _running_task_id
 
     task_type = _task_types.pop(task_id, None)
 
@@ -204,7 +191,16 @@ def _run_one(task_id: str, fn) -> None:
     _update(task_id, status="running", started_at=time.time())
     ctx = TaskContext(task_id)
     try:
-        result = fn(ctx) or {}
+        try:
+            result = fn(ctx) or {}
+        finally:
+            # Any scan that actually started (done/error/cancelled alike) may
+            # have inserted or flagged files. Bumped *before* the status below
+            # flips to a terminal state, so a client that sees "done" and
+            # immediately asks for a rename preview can't be handed one cached
+            # from before this scan.
+            if task_type == "scan":
+                db.bump_files_generation()
         if ctx.cancelled:
             _update(task_id, status="cancelled", ended_at=time.time())
         else:
@@ -223,12 +219,6 @@ def _run_one(task_id: str, fn) -> None:
         ctx.log(f"ERROR: {exc}")
         _update(task_id, status="error", ended_at=time.time())
     finally:
-        # Bumped on any scan that actually started, done/error/cancelled alike
-        # -- even a cancelled or failed scan may already have inserted or
-        # flagged files, so a consumer relying on this (e.g. the rename
-        # preview cache) shouldn't treat the inventory as unchanged.
-        if task_type == "scan":
-            _scan_generation += 1
         with _cancel_lock:
             _cancel_requested.discard(task_id)
             _running_task_id = None

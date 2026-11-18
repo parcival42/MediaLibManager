@@ -206,6 +206,27 @@ def delete_assignment(assignment_id: int, _: str = Depends(auth.current_user)):
     return {"ok": True}
 
 
+def _prune_preview_tasks(task_type: str) -> None:
+    """Delete finished preview tasks of ``task_type`` before a new one starts.
+
+    A finished preview is done being useful once a newer one exists; without
+    this, preview runs would fill up the Tasks history and push real
+    scans/renames off its first page. Rows whose result is still cached (see
+    ``engine.protected_preview_task_ids``) are kept, since a cache entry or
+    another open tab may still point at them.
+    """
+    keep_ids = engine.protected_preview_task_ids()
+    sql = "DELETE FROM tasks WHERE type = ? AND status NOT IN ('queued', 'running')"
+    params: list = [task_type]
+    if keep_ids:
+        sql += f" AND id NOT IN ({','.join('?' * len(keep_ids))})"
+        params += list(keep_ids)
+    con = db.connect()
+    con.execute(sql, params)
+    con.commit()
+    con.close()
+
+
 @router.post("/preview")
 def preview_rename(directory: str | None = None, force: bool = False, _: str = Depends(auth.current_user)):
     try:
@@ -228,23 +249,7 @@ def preview_rename(directory: str | None = None, force: bool = False, _: str = D
     else:
         engine.invalidate_recent_previews()
 
-    # A finished preview task is done being useful the moment a new one is
-    # created for the same scope — without this, preview runs would otherwise
-    # fill up the Tasks history and push real scans/renames off its first
-    # page. Rows a cache entry still points at (a different scope's) are
-    # excluded, or a page load that hits that cache would be handed a task id
-    # whose row just got deleted.
-    keep_ids = engine.recent_preview_task_ids()
-    sql = "DELETE FROM tasks WHERE type = 'rename_preview' AND status NOT IN ('queued', 'running')"
-    params: list = []
-    if keep_ids:
-        sql += f" AND id NOT IN ({','.join('?' * len(keep_ids))})"
-        params = list(keep_ids)
-    con = db.connect()
-    con.execute(sql, params)
-    con.commit()
-    con.close()
-
+    _prune_preview_tasks("rename_preview")
     task_id = runner.create_task("rename_preview", {"directory": directory})
     runner.enqueue(task_id, lambda ctx: engine.preview(ctx, directory=directory))
     return {"task_id": task_id}
@@ -313,15 +318,7 @@ def _resolve_quick(req: QuickParams) -> tuple[str, list[str], str]:
 @router.post("/quick/preview")
 def quick_preview(req: QuickParams, _: str = Depends(auth.current_user)):
     directory, terms, replacement = _resolve_quick(req)
-    # Only the latest quick preview is ever looked at; drop finished ones so
-    # they don't crowd real tasks off the Tasks history.
-    con = db.connect()
-    con.execute(
-        "DELETE FROM tasks WHERE type = 'rename_quick_preview' "
-        "AND status NOT IN ('queued', 'running')"
-    )
-    con.commit()
-    con.close()
+    _prune_preview_tasks("rename_quick_preview")
     task_id = runner.create_task(
         "rename_quick_preview",
         {"directory": directory, "recursive": req.recursive, "terms": terms, "mode": req.mode},

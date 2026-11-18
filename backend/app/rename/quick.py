@@ -10,17 +10,16 @@ alphanumeric only matches as a whole token on that side ("HD" does not hit
 "HDR"), while non-alphanumeric edges match anywhere ("[" is removed
 everywhere).
 
-Preview and apply mirror ``engine.preview`` / ``engine.apply_renames``: both run
-through the task queue, the full preview result goes into the engine's preview
-cache (fetched via the regular ``GET /api/rename/preview/{task_id}``), and
-apply recomputes every target from the same parameters instead of trusting
-client-supplied names.
+Preview and apply share the engine's helpers (``simulate_collisions``,
+``apply_batch``): both run through the task queue, the full preview result
+goes into the engine's preview cache (fetched via the regular
+``GET /api/rename/preview/{task_id}``), and apply recomputes every target from
+the same parameters instead of trusting client-supplied names.
 """
 import os
 import re
-from collections import defaultdict
 
-from .. import db, stash
+from .. import db
 from . import engine, rules
 
 
@@ -67,71 +66,54 @@ def compute_target(path: str, terms: list[str], replacement: str) -> str | None:
 
 def _in_scope(path: str, directory: str, recursive: bool) -> bool:
     parent = os.path.dirname(path)
-    if parent == directory:
+    base = directory.rstrip("/")
+    if parent == base:
         return True
-    return recursive and parent.startswith(directory.rstrip(os.sep) + os.sep)
-
-
-def _like_prefix(directory: str) -> str:
-    return directory.rstrip(os.sep) + os.sep + "%"
+    return recursive and parent.startswith(base + "/")
 
 
 def preview(ctx, directory: str, recursive: bool, terms: list[str], replacement: str) -> dict:
     """Compute proposed renames for present files in scope.
 
-    Collision suffixes are simulated in path order against every known path
-    in the affected directories (regardless of ``present``), the same way
-    ``engine.preview`` does, so preview and apply agree.
+    Collision suffixes are simulated against every known path in scope
+    (regardless of ``present``), the same way ``engine.preview`` does, so
+    preview and apply agree.
     """
     ctx.log(f"Scope: {directory} ({'recursive' if recursive else 'this directory only'})")
     ctx.log(f"Terms: {', '.join(terms)}")
     con = db.connect()
     try:
-        like = _like_prefix(directory)
+        scope_sql, scope_params = db.under_dir(directory)
         files = [
             dict(r) for r in con.execute(
-                "SELECT id, path FROM files WHERE present = 1 AND path LIKE ?", (like,)
+                f"SELECT id, path FROM files WHERE present = 1 AND {scope_sql}", scope_params
             ).fetchall()
             if _in_scope(r["path"], directory, recursive)
         ]
         all_paths = [r["path"] for r in con.execute(
-            "SELECT path FROM files WHERE path LIKE ?", (like,)
+            f"SELECT path FROM files WHERE {scope_sql}", scope_params
         ).fetchall()]
     finally:
         con.close()
 
     ctx.progress(5)
-    taken_by_dir: dict[str, set[str]] = defaultdict(set)
-    for p in all_paths:
-        taken_by_dir[os.path.dirname(p)].add(os.path.basename(p))
-
-    files.sort(key=lambda f: f["path"])
-    total = len(files)
-    step = max(1, total // 50)
-    renames: list[dict] = []
-    for i, f in enumerate(files, start=1):
-        ctx.raise_if_cancelled()
+    candidates: list[dict] = []
+    for f in files:
         target = compute_target(f["path"], terms, replacement)
         if target is not None:
-            own = os.path.basename(f["path"])
-            parent = os.path.dirname(f["path"])
-            taken = taken_by_dir[parent]
-            final = rules.next_free_name(target, lambda n: n in taken and n != own)
-            taken.discard(own)
-            taken.add(final)
-            if final != own:
-                renames.append({
-                    "file_id": f["id"],
-                    "path": f["path"],
-                    "directory": parent,
-                    "current_name": own,
-                    "new_name": final,
-                    "collision": final != target,
-                })
-        if i % step == 0 or i == total:
-            ctx.progress(5 + 95 * i / total)
+            candidates.append({
+                "file_id": f["id"],
+                "path": f["path"],
+                "directory": os.path.dirname(f["path"]),
+                "current_name": os.path.basename(f["path"]),
+                "target": target,
+            })
+    ctx.progress(20)
+    renames = engine.simulate_collisions(
+        candidates, engine.taken_names_by_dir(all_paths), ctx, progress_from=20
+    )
 
-    ctx.log(f"Done — {len(renames)} of {total} files affected.")
+    ctx.log(f"Done — {len(renames)} of {len(files)} files affected.")
     engine.cache_preview(ctx.task_id, {"renames": renames, "pending": []})
     return {"rename_count": len(renames)}
 
@@ -141,8 +123,7 @@ def apply(file_ids: list[int], directory: str, recursive: bool, terms: list[str]
     """Rename the selected files, recomputing each target server-side.
 
     Files that are gone, no longer in scope (e.g. renamed/moved since the
-    preview) or would no longer change are skipped. Per-file errors are
-    logged and the batch continues.
+    preview) or would no longer change are skipped.
     """
     if not file_ids:
         return {"renamed": 0, "skipped": 0, "errors": 0, "renamed_ids": []}
@@ -150,40 +131,20 @@ def apply(file_ids: list[int], directory: str, recursive: bool, terms: list[str]
     # Rule previews cached per scope would otherwise keep showing old names.
     engine.invalidate_recent_previews()
 
-    changed_paths: list[str] = []
     con = db.connect()
     try:
         placeholders = ",".join("?" * len(file_ids))
-        rows = con.execute(
+        rows = [dict(r) for r in con.execute(
             f"SELECT id, path, present FROM files WHERE id IN ({placeholders})", file_ids
-        ).fetchall()
-        ordered = sorted((dict(r) for r in rows), key=lambda r: r["path"])
-        skipped = len(file_ids) - len(ordered)
-        renamed = errors = 0
-        renamed_ids: list[int] = []
-        total = len(ordered)
-
-        for i, f in enumerate(ordered, start=1):
-            ctx.raise_if_cancelled()
-            target = None
-            if f["present"] and _in_scope(f["path"], directory, recursive):
-                target = compute_target(f["path"], terms, replacement)
-            if target is None:
-                skipped += 1
-            else:
-                outcome = engine.rename_one(con, f["id"], f["path"], target, ctx)
-                if outcome == "renamed":
-                    renamed += 1
-                    renamed_ids.append(f["id"])
-                    changed_paths.append(f["path"])
-                elif outcome == "error":
-                    errors += 1
-                else:
-                    skipped += 1
-            ctx.progress(100 * i / total)
-
-        return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
+        ).fetchall()]
     finally:
         con.close()
-        # Also after a cancellation: files renamed before it still changed.
-        stash.notify_changed(changed_paths, ctx.log)
+
+    def target_for(f: dict) -> str | None:
+        if not _in_scope(f["path"], directory, recursive):
+            return None
+        return compute_target(f["path"], terms, replacement)
+
+    result = engine.apply_batch(rows, target_for, ctx)
+    result["skipped"] += len(file_ids) - len(rows)  # ids no longer in the DB
+    return result

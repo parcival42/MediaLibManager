@@ -24,14 +24,6 @@ from .. import config, db
 from . import exact, visual
 
 
-def _like_pattern(directory: str | None) -> str | None:
-    """Escape LIKE wildcards and build a recursive-prefix pattern for ``directory``."""
-    if not directory:
-        return None
-    escaped = directory.rstrip("/").replace("%", "\\%").replace("_", "\\_")
-    return escaped + "/%"
-
-
 def _load_ignore_pairs(con) -> set[tuple[int, int]]:
     rows = con.execute("SELECT file_id_a, file_id_b FROM dedup_ignores").fetchall()
     return {(r["file_id_a"], r["file_id_b"]) for r in rows}
@@ -65,7 +57,8 @@ def rebuild(ctx, directory: str | None = None) -> dict:
     deep_threshold = int(config.get("deep_threshold"))
     deep_min_fraction = float(config.get("deep_min_fraction"))
     deep_enabled = bool(config.get("deep_enabled"))
-    pattern = _like_pattern(directory)
+    # Exact, case-sensitive prefix match (LIKE would ignore ASCII case).
+    pattern = db.under_dir(directory) if directory else None
 
     ctx.log(f"Scope: {directory}" if directory else "Scope: entire library")
 

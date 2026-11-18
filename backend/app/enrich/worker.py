@@ -137,6 +137,9 @@ def _process_one(row) -> None:
                 (*cols.values(), row["id"]))
     con.commit()
     con.close()
+    # Stage 0 fills in width/height/duration, which rename rules depend on.
+    if succeeded and src_stage == 0:
+        db.bump_files_generation()
     # Record the finished step against the stage it completed, for the phase ETA.
     # Errors are terminal and don't reflect steady-state throughput, so skip them.
     if succeeded and src_stage < 3:
@@ -278,6 +281,7 @@ def retry_file(file_id: int) -> str:
         except OSError:
             con.execute("UPDATE files SET present = 0 WHERE id = ?", (file_id,))
             con.commit()
+            db.bump_files_generation()
             return "missing"
 
         con.execute(
@@ -290,6 +294,7 @@ def retry_file(file_id: int) -> str:
              st.st_dev, st.st_ino, time.time(), file_id),
         )
         con.commit()
+        db.bump_files_generation()
         return "queued"
     finally:
         con.close()

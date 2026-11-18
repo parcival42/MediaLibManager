@@ -59,9 +59,9 @@ def candidates(directory: str | None = None) -> list[dict]:
         where = list(_BASE_CANDIDATE_CONDITIONS)
         params: list = []
         if directory:
-            like = directory.rstrip(os.sep) + os.sep + "%"
-            where.append("(path = ? OR path LIKE ?)")
-            params += [directory, like]
+            scope_sql, scope_params = db.under_dir(directory)
+            where.append(scope_sql)
+            params += scope_params
         rows = con.execute(
             f"SELECT {_CANDIDATE_COLUMNS} FROM files WHERE {' AND '.join(where)} ORDER BY path",
             params,

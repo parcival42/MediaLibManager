@@ -59,5 +59,7 @@ def run_delete(file_ids: list[int], ctx) -> dict:
         con.commit()
     finally:
         con.close()
+        if deleted:
+            db.bump_files_generation()
 
     return {"deleted": deleted, "errors": errors, "freed_bytes": freed}

@@ -22,7 +22,6 @@ from collections import OrderedDict, defaultdict
 from pathlib import Path
 
 from .. import db, stash
-from ..tasks import runner
 from . import rules
 
 # Guards both caches below: the worker thread writes them while a preview
@@ -59,9 +58,10 @@ def find_recent_preview(directory: str | None) -> str | None:
     """Return a still-valid task id for ``directory``'s last preview, or
     ``None`` if there isn't one.
 
-    Valid means: computed less than ``_RECENT_PREVIEW_TTL`` ago, and no scan
-    has finished since (``runner.scan_generation()`` unchanged) — a scan is
-    the only thing that changes *which files exist*. Rule/filter/assignment
+    Valid means: computed less than ``_RECENT_PREVIEW_TTL`` ago, and the files
+    inventory hasn't changed since (``db.files_generation()`` unchanged --
+    bumped by scans, enrichment's metadata stage, deletes, cleanup and
+    resets). Rule/filter/assignment
     edits change the answer too but aren't tracked here — the user accepted
     relying on the Refresh button (a forced recompute, see ``force`` in
     ``api/rename.py``) after editing those instead of a third trigger here.
@@ -72,7 +72,7 @@ def find_recent_preview(directory: str | None) -> str | None:
             return None
         if time.time() - entry["computed_at"] > _RECENT_PREVIEW_TTL:
             return None
-        if entry["generation"] != runner.scan_generation():
+        if entry["generation"] != db.files_generation():
             return None
         task_id = entry["task_id"]
         if task_id not in _preview_cache:
@@ -102,21 +102,23 @@ def find_recent_preview(directory: str | None) -> str | None:
     return task_id
 
 
-def _remember_recent_preview(directory: str | None, task_id: str) -> None:
+def _remember_recent_preview(directory: str | None, task_id: str, generation: int) -> None:
     with _preview_lock:
         _recent_preview[directory] = {
             "task_id": task_id,
             "computed_at": time.time(),
-            "generation": runner.scan_generation(),
+            "generation": generation,
         }
 
 
-def recent_preview_task_ids() -> set[str]:
-    """Task ids currently referenced by ``_recent_preview``, across all scopes
-    — the history cleanup in ``api/rename.py`` must not delete these rows out
-    from under a cache entry that still points at them."""
+def protected_preview_task_ids() -> set[str]:
+    """Task ids the preview history cleanup in ``api/rename.py`` must keep:
+    everything a ``_recent_preview`` entry points at, plus every result still
+    in ``_preview_cache`` -- another browser tab may be displaying one, and
+    deleting its row would make that tab's task poll 404 and show an error
+    even though the result is still available."""
     with _preview_lock:
-        return {entry["task_id"] for entry in _recent_preview.values()}
+        return {entry["task_id"] for entry in _recent_preview.values()} | set(_preview_cache)
 
 
 def invalidate_recent_previews() -> None:
@@ -243,26 +245,17 @@ def preview(ctx, directory: str | None = None) -> dict:
     below takes — it still only reads the DB, no filesystem writes.
     """
     ctx.log(f"Scope: {directory}" if directory else "Scope: entire library")
+    # Captured up front: an inventory change while this runs must invalidate
+    # the cached result, not be baked into it as "seen".
+    generation = db.files_generation()
     con = db.connect()
     try:
-        where = ["present = 1"]
-        params: list = []
-        if directory:
-            like = directory.rstrip(os.sep) + os.sep + "%"
-            where.append("(path = ? OR path LIKE ?)")
-            params += [directory, like]
-        clause = " WHERE " + " AND ".join(where)
-
+        scope_sql, scope_params = db.under_dir(directory) if directory else ("1", [])
         files = [dict(r) for r in con.execute(
-            f"SELECT {_FILE_COLUMNS} FROM files{clause}", params
+            f"SELECT {_FILE_COLUMNS} FROM files WHERE present = 1 AND {scope_sql}", scope_params
         ).fetchall()]
-
-        scope_clause, scope_params = "", []
-        if directory:
-            scope_clause = " WHERE path = ? OR path LIKE ?"
-            scope_params = [directory, like]
         all_paths = [r["path"] for r in con.execute(
-            f"SELECT path FROM files{scope_clause}", scope_params
+            f"SELECT path FROM files WHERE {scope_sql}", scope_params
         ).fetchall()]
 
         assignments = _load_assignments(con)
@@ -271,14 +264,12 @@ def preview(ctx, directory: str | None = None) -> dict:
         con.close()
 
     ctx.progress(5)
-    taken_by_dir: dict[str, set[str]] = defaultdict(set)
-    for p in all_paths:
-        taken_by_dir[os.path.dirname(p)].add(os.path.basename(p))
+    taken_by_dir = taken_names_by_dir(all_paths)
 
     if not files:
         ctx.log("No files in scope.")
         cache_preview(ctx.task_id, {"renames": [], "pending": []})
-        _remember_recent_preview(directory, ctx.task_id)
+        _remember_recent_preview(directory, ctx.task_id, generation)
         return {"rename_count": 0, "pending_count": 0}
 
     ctx.log(f"Matching rules for {len(files)} files…")
@@ -310,38 +301,92 @@ def preview(ctx, directory: str | None = None) -> dict:
             ctx.progress(5 + 80 * i / len(files))
             ctx.log(f"Matched {i} of {len(files)} files…")
 
-    candidates.sort(key=lambda c: c["path"])
-
     ctx.log(f"Resolving {len(candidates)} potential collisions…")
-    renames: list[dict] = []
-    if candidates:
-        collision_step = max(1, len(candidates) // 20)
-        for i, c in enumerate(candidates, start=1):
-            ctx.raise_if_cancelled()
-            taken = taken_by_dir[c["directory"]]
-            own = c["current_name"]
-            final = rules.next_free_name(c["target"], lambda n: n in taken and n != own)
-            taken.discard(own)
-            taken.add(final)
-            if final != own:
-                renames.append({
-                    "file_id": c["file_id"],
-                    "path": c["path"],
-                    "directory": c["directory"],
-                    "current_name": own,
-                    "new_name": final,
-                    "rule_id": c["rule_id"],
-                    "rule_name": c["rule_name"],
-                    "collision": final != c["target"],
-                })
-            if i % collision_step == 0 or i == len(candidates):
-                ctx.progress(85 + 15 * i / len(candidates))
+    renames = simulate_collisions(candidates, taken_by_dir, ctx, progress_from=85)
 
-    renames.sort(key=lambda r: r["path"])
     ctx.log(f"Done — {len(renames)} renames, {len(pending)} pending.")
     cache_preview(ctx.task_id, {"renames": renames, "pending": pending})
-    _remember_recent_preview(directory, ctx.task_id)
+    _remember_recent_preview(directory, ctx.task_id, generation)
     return {"rename_count": len(renames), "pending_count": len(pending)}
+
+
+def taken_names_by_dir(paths) -> dict[str, set[str]]:
+    """Basenames grouped by parent directory -- the collision-blocking set
+    for ``simulate_collisions``."""
+    taken: dict[str, set[str]] = defaultdict(set)
+    for p in paths:
+        taken[os.path.dirname(p)].add(os.path.basename(p))
+    return taken
+
+
+def simulate_collisions(candidates: list[dict], taken_by_dir: dict[str, set[str]], ctx,
+                        progress_from: float = 0) -> list[dict]:
+    """Resolve ``_1``/``_2`` suffixes for preview the same way apply will.
+
+    Each candidate needs ``path``, ``directory``, ``current_name`` and
+    ``target``; any other keys are carried over. Processed in path order
+    (as apply does), so the result matches what apply will produce. Returns
+    the renames that still change something, each with ``new_name`` and
+    ``collision`` (true when the literal target was taken) instead of
+    ``target``; ``taken_by_dir`` is updated in place.
+    """
+    ordered = sorted(candidates, key=lambda c: c["path"])
+    total = len(ordered)
+    step = max(1, total // 20)
+    renames: list[dict] = []
+    for i, c in enumerate(ordered, start=1):
+        ctx.raise_if_cancelled()
+        taken = taken_by_dir[c["directory"]]
+        own = c["current_name"]
+        final = rules.next_free_name(c["target"], lambda n: n in taken and n != own)
+        taken.discard(own)
+        taken.add(final)
+        if final != own:
+            item = {k: v for k, v in c.items() if k != "target"}
+            item["new_name"] = final
+            item["collision"] = final != c["target"]
+            renames.append(item)
+        if i % step == 0 or i == total:
+            ctx.progress(progress_from + (100 - progress_from) * i / total)
+    return renames
+
+
+def apply_batch(rows: list[dict], compute_target, ctx) -> dict:
+    """Rename ``rows`` (dicts with ``id``, ``path``, ``present``) in path
+    order, each to ``compute_target(row)`` (``None`` = skip).
+
+    Shared by rule-based and quick-edit apply. Per-file errors are logged and
+    the batch continues. Changed directories are handed to the Stash
+    integration, also after a cancellation (files renamed before it still
+    changed).
+    """
+    ordered = sorted(rows, key=lambda r: r["path"])
+    total = len(ordered)
+    renamed = skipped = errors = 0
+    renamed_ids: list[int] = []
+    changed_paths: list[str] = []
+    con = db.connect()
+    try:
+        for i, row in enumerate(ordered, start=1):
+            ctx.raise_if_cancelled()
+            target = compute_target(row) if row["present"] else None
+            if target is None or target == os.path.basename(row["path"]):
+                skipped += 1
+            else:
+                outcome = rename_one(con, row["id"], row["path"], target, ctx)
+                if outcome == "renamed":
+                    renamed += 1
+                    renamed_ids.append(row["id"])
+                    changed_paths.append(row["path"])
+                elif outcome == "error":
+                    errors += 1
+                else:
+                    skipped += 1
+            ctx.progress(100 * i / total)
+        return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
+    finally:
+        con.close()
+        stash.notify_changed(changed_paths, ctx.log)
 
 
 def apply_renames(file_ids: list[int], ctx) -> dict:
@@ -371,56 +416,27 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
     # pre-apply cached preview either way.
     invalidate_recent_previews()
 
-    changed_paths: list[str] = []
     con = db.connect()
     try:
         assignments = _load_assignments(con)
         filters_by_id = _load_strip_filters(con)
         placeholders = ",".join("?" * len(file_ids))
-        rows = con.execute(
+        rows = [dict(r) for r in con.execute(
             f"SELECT {_FILE_COLUMNS}, present FROM files WHERE id IN ({placeholders})",
             file_ids,
-        ).fetchall()
-        by_id = {r["id"]: dict(r) for r in rows}
-        ordered = sorted(file_ids, key=lambda fid: by_id[fid]["path"] if fid in by_id else "")
-
-        total = len(ordered)
-        renamed = skipped = errors = 0
-        renamed_ids: list[int] = []
-
-        for i, fid in enumerate(ordered, start=1):
-            ctx.raise_if_cancelled()
-            f = by_id.get(fid)
-            if f is None or not f["present"]:
-                skipped += 1
-                continue
-
-            match = _best_assignment(assignments, f["path"])
-            if not match:
-                skipped += 1
-                continue
-            target = rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
-            current_name = os.path.basename(f["path"])
-            if target is None or target == current_name:
-                skipped += 1
-                continue
-
-            outcome = rename_one(con, fid, f["path"], target, ctx)
-            if outcome == "renamed":
-                renamed += 1
-                renamed_ids.append(fid)
-                changed_paths.append(f["path"])
-            elif outcome == "error":
-                errors += 1
-            else:
-                skipped += 1
-            ctx.progress(100 * i / total)
-
-        return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
+        ).fetchall()]
     finally:
         con.close()
-        # Also after a cancellation: files renamed before it still changed.
-        stash.notify_changed(changed_paths, ctx.log)
+
+    def compute_target(f: dict) -> str | None:
+        match = _best_assignment(assignments, f["path"])
+        if not match:
+            return None
+        return rules.build_target_name(match, match["assign_dir"], f, filters_by_id)
+
+    result = apply_batch(rows, compute_target, ctx)
+    result["skipped"] += len(file_ids) - len(rows)  # ids no longer in the DB
+    return result
 
 
 def rename_one(con, fid: int, path: str, target: str, ctx) -> str:

@@ -9,7 +9,7 @@ import sqlite3
 
 
 def find_exact_groups(
-    con: sqlite3.Connection, directory_pattern: str | None = None
+    con: sqlite3.Connection, scope: tuple[str, list] | None = None
 ) -> list[tuple[str, list[int]]]:
     """Group present files that share an identical MD5.
 
@@ -19,9 +19,9 @@ def find_exact_groups(
     """
     where = "present = 1 AND md5 IS NOT NULL AND md5 != ''"
     params: list = []
-    if directory_pattern:
-        where += " AND path LIKE ? ESCAPE '\\'"
-        params.append(directory_pattern)
+    if scope:
+        where += " AND " + scope[0]
+        params += scope[1]
 
     rows = con.execute(
         f"SELECT id, type, md5 FROM files WHERE {where}", params
