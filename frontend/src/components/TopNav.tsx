@@ -71,16 +71,16 @@ export default function TopNav({
       </button>
 
       {/* Main functions */}
-      <nav className="ml-1 flex gap-0.5 rounded-xl border border-line bg-bg/50 p-1">
+      <nav className="ml-1 flex min-w-0 gap-0.5 overflow-x-auto rounded-xl border border-line bg-bg/50 p-1">
         {MAIN.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             className={({ isActive }) =>
               [
-                'rounded-lg px-3.5 py-2 text-[13.5px] font-medium transition',
+                'shrink-0 whitespace-nowrap rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition',
                 isActive
-                  ? 'bg-gradient-to-br from-accent to-accent-2 text-bg shadow-glow'
+                  ? 'bg-surface-3 text-accent shadow-sm'
                   : 'text-ink-2 hover:bg-white/5 hover:text-ink-1',
               ].join(' ')
             }
@@ -90,7 +90,7 @@ export default function TopNav({
         ))}
       </nav>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {/* Running tasks */}
         <NavLink
           to="/tasks"
@@ -137,6 +137,8 @@ export default function TopNav({
         {/* Language */}
         <button
           onClick={() => setLang(lang === 'de' ? 'en' : 'de')}
+          title={t('language_toggle')}
+          aria-label={t('language_toggle')}
           className="h-9 rounded-xl border border-line bg-surface-2 px-3 text-xs font-semibold text-ink-2 transition hover:bg-surface-3 hover:text-ink-1"
         >
           {lang.toUpperCase()}
@@ -146,6 +148,8 @@ export default function TopNav({
         <div className="relative">
           <button
             onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
             className="flex h-9 items-center gap-2 rounded-xl pl-1 pr-2 text-[13px] text-ink-2 transition hover:text-ink-1"
           >
             <span className="grid h-7 w-7 place-items-center rounded-[9px] bg-gradient-to-br from-surface-4 to-surface-3 font-head text-[13px] font-semibold text-accent">
@@ -159,7 +163,7 @@ export default function TopNav({
             <>
               <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
               <div className="absolute right-0 z-40 mt-2 w-44 overflow-hidden rounded-xl border border-line bg-surface-2 p-1 shadow-card">
-                <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-ink-3">
+                <div className="truncate px-3 py-2 text-xs text-ink-3">
                   {username}
                 </div>
                 <button

@@ -14,10 +14,3 @@ export function formatDuration(seconds?: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`
 }
-
-export const TYPE_ICON: Record<string, string> = {
-  video: '🎬',
-  image: '🖼',
-  audio: '🎵',
-  other: '📄',
-}

@@ -3,9 +3,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, PageHeader, Segmented, Spinner } from '../components/ui'
-import { IconFolder } from '../components/icons'
-import DirectoryTree from '../components/DirectoryTree'
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Input,
+  PageHeader,
+  Segmented,
+  SelectionBar,
+  Spinner,
+  Toggle,
+} from '../components/ui'
+import { IconEdit, IconRefresh } from '../components/icons'
+import ScopePicker from '../components/ScopePicker'
 import { TaskProgressPanel, useTaskPolling } from '../components/TaskProgress'
 import { previewResultKey, usePreviewTask } from '../components/usePreviewTask'
 import QuickRename from '../components/QuickRename'
@@ -66,16 +76,6 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const [scope, setScope] = useState<string | null>(null)
-  const [treeOpen, setTreeOpen] = useState(false)
-  const treeRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!treeOpen) return
-    const onClick = (e: globalThis.MouseEvent) => {
-      if (treeRef.current && !treeRef.current.contains(e.target as Node)) setTreeOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [treeOpen])
 
   const [onlyCollisions, setOnlyCollisions] = useState(false)
 
@@ -272,86 +272,53 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
         actions={
           <>
             {tabs}
-            <Button onClick={refreshPreview} disabled={previewBusy}>
-              {previewBusy && <Spinner className="h-3.5 w-3.5" />}
+            <Button variant="subtle" onClick={refreshPreview} disabled={previewBusy}>
+              {previewBusy ? <Spinner className="h-3.5 w-3.5" /> : <IconRefresh />}
               {previewBusy ? t('ren_previewing') : t('ren_refresh')}
             </Button>
           </>
         }
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <div className="relative" ref={treeRef}>
-          <Button size="sm" variant="subtle" onClick={() => setTreeOpen((o) => !o)}>
-            <IconFolder width={15} height={15} />
-            {scope ?? t('dup_scope_all')}
-          </Button>
-          {scope && (
-            <button
-              onClick={() => setScope(null)}
-              title={t('dup_scope_clear')}
-              className="ml-1.5 text-xs text-ink-3 hover:text-ink-1"
-            >
-              ✕
-            </button>
-          )}
-          {treeOpen && (
-            <div className="absolute left-0 top-full z-20 mt-2 max-h-80 w-80 overflow-auto rounded-xl border border-line bg-surface-2 p-2 shadow-card">
-              <DirectoryTree
-                value={scope}
-                onSelect={(p) => {
-                  setScope(p)
-                  setTreeOpen(false)
-                }}
-              />
-            </div>
-          )}
-        </div>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <ScopePicker value={scope} onChange={setScope} />
       </div>
 
       {previewData && (
-        <>
-          <div className="mb-2 flex items-center gap-4 text-sm text-ink-3">
-            <span>
-              {renames.length.toLocaleString()} {t('ren_proposed_count')}
-            </span>
-            {collisionCount > 0 && (
-              <button
-                onClick={() => setOnlyCollisions((v) => !v)}
-                className={`rounded-full px-2 py-0.5 text-xs font-medium transition ${
-                  onlyCollisions ? 'bg-warn text-bg' : 'bg-warn/15 text-warn hover:bg-warn/25'
-                }`}
-              >
-                {collisionCount} {t('ren_collisions')}
-              </button>
-            )}
-            {pending.length > 0 && (
+        <SelectionBar
+          summary={
+            <>
               <span>
-                {pending.length} {t('ren_pending_count')}
+                {renames.length.toLocaleString()} {t('ren_proposed_count')}
               </span>
-            )}
-          </div>
-
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            {renames.length > 0 && (
-              <Button size="sm" variant="subtle" onClick={selectAll}>
+              {collisionCount > 0 && (
+                <Toggle pressed={onlyCollisions} onChange={setOnlyCollisions} tone="warn">
+                  {collisionCount} {t('ren_collisions')}
+                </Toggle>
+              )}
+              {pending.length > 0 && (
+                <span>
+                  {pending.length} {t('ren_pending_count')}
+                </span>
+              )}
+            </>
+          }
+          actions={
+            <>
+              <Button size="sm" variant="subtle" onClick={selectAll} disabled={renames.length === 0}>
                 {t('ren_select_all')}
               </Button>
-            )}
-            {selected.size > 0 && (
-              <Button size="sm" variant="subtle" onClick={() => setSelected(new Set())}>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
                 {t('dup_deselect_all')}
               </Button>
-            )}
-            {selected.size > 0 && (
-              <Button size="sm" onClick={onApply} disabled={applying}>
+              <Button size="sm" onClick={onApply} disabled={applying || selected.size === 0}>
                 {applying
                   ? `${t('ren_applying')} ${Math.round(applyTask.data?.progress ?? 0)}%`
                   : `${t('ren_apply')} (${selected.size})`}
               </Button>
-            )}
-          </div>
-        </>
+            </>
+          }
+        />
       )}
 
       {previewBusy ? (
@@ -381,14 +348,11 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
                       <span className="min-w-0 flex-1 truncate font-mono" title={entry.dir}>
                         {entry.dir}
                       </span>
-                      <button
-                        onClick={() => toggleGroup(entry.items)}
-                        className="shrink-0 text-accent hover:underline"
-                      >
+                      <Button variant="link" onClick={() => toggleGroup(entry.items)}>
                         {entry.items.every((i) => selected.has(i.file_id))
                           ? t('ren_deselect_group')
                           : t('ren_select_group')}
-                      </button>
+                      </Button>
                     </div>
                   )}
                   {entry.kind === 'item' && (
@@ -402,15 +366,17 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
                           type="checkbox"
                           checked={selected.has(entry.item.file_id)}
                           onChange={() => toggle(entry.item.file_id)}
-                          className="mt-1 h-3.5 w-3.5 shrink-0"
+                          className="mt-0.5 h-4 w-4 shrink-0"
                         />
                         <div className="min-w-0 flex-1 space-y-0.5">
-                          <div className="break-all text-ink-2">
+                          <div className="break-all text-ink-3">
                             {entry.item.current_name}
                           </div>
                           {editingId === entry.item.file_id ? (
-                            <input
+                            <Input
                               autoFocus
+                              inputSize="sm"
+                              aria-label={t('rename_placeholder')}
                               value={editValue}
                               onChange={(e) => setEditValue(e.target.value)}
                               onClick={(e) => e.preventDefault()}
@@ -424,7 +390,7 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
                                   setEditingId(null)
                                 }
                               }}
-                              className="w-full rounded border border-line bg-surface-1 px-1.5 py-0.5 text-xs text-ink-1"
+                              className="w-full"
                             />
                           ) : (
                             <div className="break-all text-ink-1">
@@ -432,45 +398,45 @@ function RuleRename({ tabs }: { tabs: ReactNode }) {
                             </div>
                           )}
                         </div>
-                        <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                          {entry.item.collision && (
-                            <span className="rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
-                              {t('ren_collision_badge')}
-                            </span>
-                          )}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {entry.item.collision && <Badge tone="warn">{t('ren_collision_badge')}</Badge>}
                           {editingId === entry.item.file_id ? (
                             <>
-                              <button
+                              <Button
+                                size="sm"
                                 onClick={(e) => {
                                   e.preventDefault()
                                   submitEdit(entry.item.file_id)
                                 }}
                                 disabled={manualRenameMut.isPending}
-                                className="text-xs text-accent hover:underline"
                               >
                                 {t('rename_confirm')}
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
                                 onClick={(e) => {
                                   e.preventDefault()
                                   setEditingId(null)
                                 }}
-                                className="text-xs text-ink-3 hover:text-ink-1"
                               >
                                 {t('rename_cancel')}
-                              </button>
+                              </Button>
                             </>
                           ) : (
-                            <button
+                            <Button
+                              size="icon"
+                              variant="ghost"
                               onClick={(e) => {
                                 e.preventDefault()
                                 startEdit(entry.item)
                               }}
                               title={t('rename_action')}
-                              className="text-ink-3 hover:text-ink-1"
+                              aria-label={t('rename_action')}
+                              className="-my-1"
                             >
-                              ✎
-                            </button>
+                              <IconEdit />
+                            </Button>
                           )}
                         </div>
                       </label>

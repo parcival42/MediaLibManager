@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, Input } from '../components/ui'
+import { Button, Checkbox, Field, Input, Notice } from '../components/ui'
 
 export default function Login({
   needsSetup,
@@ -34,7 +34,7 @@ export default function Login({
       await api(endpoint, { method: 'POST', body: JSON.stringify(body) })
       onSuccess()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'error')
+      setError(err instanceof Error && err.message ? err.message : t('login_failed'))
     } finally {
       setBusy(false)
     }
@@ -57,68 +57,65 @@ export default function Login({
         </div>
 
         {needsSetup && (
-          <div className="mb-6 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
-            <p className="mb-1 text-sm font-semibold text-accent">{t('setup_first_run')}</p>
-            <p className="text-xs leading-relaxed text-ink-2">{t('setup_info')}</p>
+          <div className="mb-6">
+            <Notice tone="accent">
+              <p className="mb-1 font-semibold text-accent">{t('setup_first_run')}</p>
+              <p className="text-xs leading-relaxed">{t('setup_info')}</p>
+            </Notice>
           </div>
         )}
 
-        <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('username')}</label>
-        <Input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
-          className="mb-4 w-full"
-        />
+        <div className="flex flex-col gap-4">
+          <Field label={t('username')}>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+          </Field>
 
-        <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('password')}</label>
-        <Input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete={needsSetup ? 'new-password' : 'current-password'}
-          className="mb-4 w-full"
-        />
-
-        {needsSetup && (
-          <>
-            <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('confirm_password')}</label>
+          <Field label={t('password')}>
             <Input
               type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              autoComplete="new-password"
-              className="mb-4 w-full"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={needsSetup ? 'new-password' : 'current-password'}
             />
-            <label className="mb-6 flex items-start gap-2.5 text-xs text-ink-2">
-              <input
-                type="checkbox"
+          </Field>
+
+          {needsSetup && (
+            <>
+              <Field label={t('confirm_password')}>
+                <Input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </Field>
+              <Checkbox
+                className="!text-xs"
                 checked={installRenameDefaults}
-                onChange={(e) => setInstallRenameDefaults(e.target.checked)}
-                className="mt-0.5 shrink-0"
+                onChange={setInstallRenameDefaults}
+                label={t('setup_install_rename_defaults')}
               />
-              {t('setup_install_rename_defaults')}
-            </label>
-          </>
-        )}
+            </>
+          )}
 
-        {error && (
-          <p className="mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
-            {error}
-          </p>
-        )}
+          {error && <Notice>{error}</Notice>}
 
-        <Button type="submit" disabled={busy} className="w-full">
-          {needsSetup ? t('setup_btn') : t('submit')}
-        </Button>
+          <Button type="submit" disabled={busy} className="mt-2 w-full">
+            {needsSetup ? t('setup_btn') : t('submit')}
+          </Button>
+        </div>
 
-        <button
-          type="button"
-          onClick={() => setLang(lang === 'de' ? 'en' : 'de')}
-          className="mt-4 block w-full text-center text-xs text-ink-3 transition hover:text-ink-1"
-        >
-          {lang.toUpperCase()}
-        </button>
+        <div className="mt-4 text-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLang(lang === 'de' ? 'en' : 'de')}
+            title={t('language_toggle')}
+            aria-label={t('language_toggle')}
+          >
+            {lang.toUpperCase()}
+          </Button>
+        </div>
       </form>
     </div>
   )

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
-import { Spinner } from './ui'
+import { ProgressBar, Spinner } from './ui'
 
 export interface Task<R = unknown> {
   status: string
@@ -38,12 +38,7 @@ export function TaskProgressPanel({ percent, activity }: { percent: number; acti
     <div className="w-full max-w-sm text-center">
       <Spinner className="mx-auto mb-4" />
       <div className="mb-2 min-h-[1.25rem] text-sm text-ink-2">{activity}</div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg/70">
-        <div
-          className="h-full rounded-full bg-accent transition-all"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+      <ProgressBar percent={percent} showLabel={false} />
       <div className="mt-1.5 text-xs font-semibold tabular-nums text-ink-3">{Math.round(percent)}%</div>
     </div>
   )

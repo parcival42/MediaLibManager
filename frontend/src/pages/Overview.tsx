@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
+import { buttonClass, Card, PageHeader } from '../components/ui'
 import { IconDup, IconImage, IconMeta, IconRename } from '../components/icons'
 import type { SVGProps } from 'react'
 
@@ -30,19 +31,20 @@ export default function Overview() {
 
   return (
     <div>
-      {/* Hero */}
-      <div className="relative mb-8 overflow-hidden rounded-3xl border border-line bg-gradient-to-br from-surface-2 to-surface-3 px-10 py-12">
-        <div className="pointer-events-none absolute -right-20 -top-20 h-80 w-80 rounded-full bg-accent/6 blur-3xl" />
-        <p className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-ink-3">
-          {t('ov_subtitle')}
-        </p>
-        <div className="font-head text-[72px] font-bold leading-none tabular-nums text-ink-1 sm:text-[88px]">
-          {data ? data.total.toLocaleString() : '—'}
-        </div>
-        <p className="mt-3 text-sm text-ink-3">{t('files_indexed')}</p>
-      </div>
+      <PageHeader title={t('nav_overview')} subtitle={t('ov_subtitle')} />
 
-      {/* Nav tiles */}
+      <Card className="mb-6 flex flex-wrap items-end justify-between gap-4 px-6 py-6 sm:px-8">
+        <div>
+          <div className="font-head text-6xl font-bold leading-none tabular-nums text-ink-1">
+            {data ? data.total.toLocaleString() : '—'}
+          </div>
+          <p className="mt-2 text-sm text-ink-3">{t('files_indexed')}</p>
+        </div>
+        <Link to="/statistics" className={buttonClass('subtle', 'sm')}>
+          {t('ov_files_link')}
+        </Link>
+      </Card>
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {TILES.map((tile) => {
           const Icon = tile.icon
@@ -50,12 +52,12 @@ export default function Overview() {
             <Link
               key={tile.to}
               to={tile.to}
-              className="group flex flex-col rounded-2xl border border-line bg-surface-2 p-5 transition hover:-translate-y-1 hover:border-surface-4 hover:shadow-card"
+              className="group flex flex-col rounded-2xl border border-line bg-surface-2 p-5 transition hover:border-surface-4 hover:bg-surface-3"
             >
-              <span className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-bg/50 text-accent transition group-hover:border-accent/40">
+              <span className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-bg/50 text-accent transition group-hover:border-accent/40">
                 <Icon width={20} height={20} />
               </span>
-              <h3 className="mt-4 font-head text-base font-semibold">{t(tile.key)}</h3>
+              <h2 className="mt-4 font-head text-base font-semibold">{t(tile.key)}</h2>
               <p className="mt-1.5 flex-1 text-[13px] leading-relaxed text-ink-3">{t(tile.descKey)}</p>
             </Link>
           )

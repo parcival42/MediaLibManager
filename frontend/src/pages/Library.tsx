@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
 import { formatSize } from '../utils'
-import { Button, EmptyState, Input, PageHeader, Segmented, StatusDot } from '../components/ui'
+import { Badge, Button, EmptyState, Input, LoadingPane, PageHeader, Segmented, StatusDot, Toggle } from '../components/ui'
 import { IconAlert, IconScan, IconSearch, TYPE_ICON_COMP } from '../components/icons'
 import MediaDetail, { type FileItem } from '../components/MediaDetail'
 import { useTaskPolling } from '../components/TaskProgress'
@@ -144,14 +144,10 @@ export default function Library() {
             { value: 'other', label: t('type_other') },
           ]}
         />
-        <Button
-          size="sm"
-          variant={missingOnly ? 'danger' : 'subtle'}
-          onClick={() => setMissingOnly((m) => !m)}
-        >
-          <IconAlert />
+        <Toggle pressed={missingOnly} onChange={setMissingOnly} tone="warn">
+          <IconAlert width={15} height={15} />
           {t('lib_missing_toggle')}
-        </Button>
+        </Toggle>
         <div className="relative ml-auto">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3">
             <IconSearch />
@@ -160,13 +156,16 @@ export default function Library() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={t('search')}
+            aria-label={t('search')}
             className="w-56 pl-9"
           />
         </div>
       </div>
 
       <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
-        {items.length === 0 && !list.isLoading ? (
+        {list.isLoading ? (
+          <LoadingPane />
+        ) : items.length === 0 ? (
           <EmptyState text={missingOnly ? t('lib_missing_none') : t('no_files')} />
         ) : (
           <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
@@ -193,29 +192,34 @@ export default function Library() {
                       <button
                         key={it.id}
                         onClick={() => setSelected(it)}
-                        className="group flex h-[160px] flex-col overflow-hidden rounded-2xl border border-line bg-surface-2 text-left transition hover:-translate-y-0.5 hover:border-surface-4 hover:shadow-card"
+                        className="group flex h-[160px] flex-col overflow-hidden rounded-2xl border border-line bg-surface-2 text-left transition hover:border-surface-4 hover:bg-surface-3"
                       >
-                        <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-gradient-to-br from-surface-3 to-surface-2 text-ink-3">
+                        <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-surface-3 text-ink-3">
                           <Thumb id={it.id} alt={it.filename} icon={Icon} />
-                          <span className="absolute left-2 top-2 rounded-md border border-line bg-bg/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-ink-2">
-                            {it.type}
-                          </span>
+                          <Badge tone="overlay" className="absolute left-2 top-2">
+                            {t(`type_${it.type}`)}
+                          </Badge>
                           {missingOnly && (
-                            <span className="absolute right-2 top-2 rounded-md bg-danger/80 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-bg">
+                            <Badge tone="danger-solid" className="absolute right-2 top-2">
                               {t('lib_missing_badge')}
-                            </span>
+                            </Badge>
                           )}
                         </div>
                         <div className="px-3 py-2">
-                          <div className="truncate text-xs font-medium text-ink-1">{it.filename}</div>
+                          <div className="truncate text-xs font-medium text-ink-1" title={it.filename}>
+                            {it.filename}
+                          </div>
                           <div className="mt-1 flex items-center justify-between text-[11px] text-ink-3">
-                            <span className="font-mono">{formatSize(it.size)}</span>
+                            <span className="tabular-nums">{formatSize(it.size)}</span>
                             {missingOnly ? (
-                              <span className="font-mono">
+                              <span className="tabular-nums">
                                 {it.last_seen ? new Date(it.last_seen * 1000).toLocaleDateString() : '?'}
                               </span>
                             ) : (
-                              <StatusDot status={it.enrich_status ?? 'pending'} />
+                              <StatusDot
+                                status={it.enrich_status ?? 'pending'}
+                                label={t(`enrich_status_${it.enrich_status ?? 'pending'}`)}
+                              />
                             )}
                           </div>
                         </div>

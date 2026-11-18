@@ -12,8 +12,19 @@ import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, Card } from './ui'
+import { Button, Card, SectionTitle } from './ui'
 import { useTaskPolling } from './TaskProgress'
+
+function Stat({ value, label, warn = false }: { value: string; label: string; warn?: boolean }) {
+  return (
+    <div>
+      <div className={`font-head text-2xl font-semibold tabular-nums ${warn ? 'text-warn' : 'text-ink-1'}`}>
+        {value}
+      </div>
+      <div className="text-xs text-ink-3">{label}</div>
+    </div>
+  )
+}
 
 interface Stats {
   total: number
@@ -100,18 +111,12 @@ export default function MaintenancePanel() {
 
   return (
     <Card className="max-w-2xl p-6">
-      <p className="mb-4 text-sm text-ink-3">{t('maint_subtitle')}</p>
+      <SectionTitle title={t('settings_maintenance_title')} description={t('maint_subtitle')} className="!mb-5" />
 
       {stats.data && (
-        <div className="mb-5 flex gap-6">
-          <div>
-            <div className="text-2xl font-semibold text-ink-1">{stats.data.total.toLocaleString()}</div>
-            <div className="text-xs text-ink-3">{t('maint_total_files')}</div>
-          </div>
-          <div>
-            <div className="text-2xl font-semibold text-warn">{stats.data.marked_missing.toLocaleString()}</div>
-            <div className="text-xs text-ink-3">{t('maint_marked_missing')}</div>
-          </div>
+        <div className="mb-5 flex gap-8">
+          <Stat value={stats.data.total.toLocaleString()} label={t('maint_total_files')} />
+          <Stat value={stats.data.marked_missing.toLocaleString()} label={t('maint_marked_missing')} warn />
         </div>
       )}
 
@@ -129,11 +134,10 @@ export default function MaintenancePanel() {
       )}
 
       <div className="mt-8 border-t border-line pt-6">
-        <p className="mb-1 text-sm font-medium text-ink-1">{t('maint_color_title')}</p>
-        <p className="mb-4 text-sm text-ink-3">{t('maint_color_subtitle')}</p>
+        <SectionTitle size="sm" title={t('maint_color_title')} description={t('maint_color_subtitle')} className="!mb-4" />
 
         <div className="flex items-center gap-4">
-          <Button onClick={() => backfillMut.mutate()} disabled={backfilling || pending === 0}>
+          <Button variant="subtle" onClick={() => backfillMut.mutate()} disabled={backfilling || pending === 0}>
             {backfilling
               ? `${t('maint_color_running')} ${Math.round(backfillTask.data?.progress ?? 0)}%`
               : t('maint_color_run')}
@@ -156,14 +160,10 @@ export default function MaintenancePanel() {
       </div>
 
       <div className="mt-8 border-t border-line pt-6">
-        <p className="mb-1 text-sm font-medium text-ink-1">{t('maint_ignores_title')}</p>
-        <p className="mb-4 text-sm text-ink-3">{t('maint_ignores_subtitle')}</p>
+        <SectionTitle size="sm" title={t('maint_ignores_title')} description={t('maint_ignores_subtitle')} className="!mb-4" />
 
-        <div className="mb-5 flex gap-6">
-          <div>
-            <div className="text-2xl font-semibold text-ink-1">{ignoredGroups.toLocaleString()}</div>
-            <div className="text-xs text-ink-3">{t('maint_ignores_count')}</div>
-          </div>
+        <div className="mb-5">
+          <Stat value={ignoredGroups.toLocaleString()} label={t('maint_ignores_count')} />
         </div>
 
         <Button

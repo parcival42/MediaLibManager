@@ -2,8 +2,9 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { LoadingPane } from '../components/ui'
-import { formatSize, TYPE_ICON } from '../utils'
+import { Card, LoadingPane, PageHeader, SectionTitle } from '../components/ui'
+import { TYPE_ICON_COMP } from '../components/icons'
+import { formatSize } from '../utils'
 
 interface TypeBucket {
   count: number
@@ -36,14 +37,12 @@ const TYPE_KEY: Record<string, string> = {
   other: 'type_other',
 }
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
+function StatCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-line bg-surface-2 p-6">
-      <h2 className="mb-5 font-head text-sm font-semibold uppercase tracking-widest text-ink-3">
-        {title}
-      </h2>
+    <Card className="p-6">
+      <SectionTitle title={title} className="!mb-5" />
       {children}
-    </section>
+    </Card>
   )
 }
 
@@ -65,21 +64,26 @@ export default function Statistics() {
     queryFn: () => api<Stats>('/api/stats'),
   })
 
+  const header = <PageHeader title={t('nav_statistics')} subtitle={t('stats_subtitle')} />
+
   if (isLoading || !data) {
-    return <LoadingPane className="h-full" />
+    return (
+      <div>
+        {header}
+        <LoadingPane />
+      </div>
+    )
   }
 
   const { library, dedup, metadata } = data
 
   return (
     <div>
-      <p className="mb-6 text-[11px] font-semibold uppercase tracking-widest text-ink-3">
-        {t('stats_subtitle')}
-      </p>
+      {header}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Library */}
-        <Card title={t('stats_library_title')}>
+        <StatCard title={t('stats_library_title')}>
           <div className="flex items-end justify-between gap-4">
             <BigNumber value={library.total.toLocaleString()} label={t('stats_files_total')} />
             <div className="text-right">
@@ -93,9 +97,10 @@ export default function Statistics() {
           <ul className="mt-6 space-y-2.5 border-t border-line pt-5">
             {TYPE_ORDER.map((type) => {
               const b = library.by_type[type] ?? { count: 0, bytes: 0 }
+              const Icon = TYPE_ICON_COMP[type]
               return (
                 <li key={type} className="flex items-center gap-3 text-sm">
-                  <span className="text-base">{TYPE_ICON[type]}</span>
+                  <Icon width={16} height={16} className="text-ink-3" />
                   <span className="text-ink-2">{t(TYPE_KEY[type])}</span>
                   <span className="ml-auto font-mono tabular-nums text-ink-1">
                     {b.count.toLocaleString()}
@@ -107,10 +112,10 @@ export default function Statistics() {
               )
             })}
           </ul>
-        </Card>
+        </StatCard>
 
         {/* Deduplication */}
-        <Card title={t('stats_dedup_title')}>
+        <StatCard title={t('stats_dedup_title')}>
           {dedup.deleted_files > 0 ? (
             <div className="flex items-end justify-between gap-4">
               <BigNumber
@@ -127,10 +132,10 @@ export default function Statistics() {
           ) : (
             <p className="text-sm text-ink-3">{t('stats_dedup_empty')}</p>
           )}
-        </Card>
+        </StatCard>
 
         {/* Metadata */}
-        <Card title={t('stats_metadata_title')}>
+        <StatCard title={t('stats_metadata_title')}>
           {metadata.stripped + metadata.failed + metadata.errors > 0 ? (
             <div className="flex items-end justify-between gap-4">
               <BigNumber
@@ -157,7 +162,7 @@ export default function Statistics() {
           ) : (
             <p className="text-sm text-ink-3">{t('stats_metadata_empty')}</p>
           )}
-        </Card>
+        </StatCard>
       </div>
     </div>
   )

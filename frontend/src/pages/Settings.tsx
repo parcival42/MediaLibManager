@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, Card, Input, PageHeader } from '../components/ui'
+import { Button, Card, Checkbox, Field, Input, PageHeader, SectionTitle, Toggle } from '../components/ui'
 import RenameRulesEditor from '../components/RenameRulesEditor'
 import MaintenancePanel from '../components/MaintenancePanel'
 
@@ -104,52 +104,30 @@ function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settin
   }
 
   return (
-    <div className="flex flex-col gap-3 border-t border-line pt-4">
-      <span className="text-xs font-medium text-ink-2">{t('settings_schedule_title')}</span>
-      <label className="flex items-center gap-2 text-sm text-ink-1">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setForm({ ...form, scan_schedule_enabled: e.target.checked })}
-        />
-        {t('settings_schedule_enabled')}
-      </label>
-      <label className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-ink-2">{t('settings_schedule_time')}</span>
-        <Input
-          type="time"
-          className="w-32"
-          value={local.time}
-          onChange={(e) => setLocal(e.target.value, localDays)}
-        />
-      </label>
-      <div className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-ink-2">{t('settings_schedule_days')}</span>
-        <div className="flex gap-1.5">
+    <div className="flex flex-col gap-4 border-t border-line pt-5">
+      <SectionTitle title={t('settings_schedule_title')} size="sm" className="!mb-0" />
+      <Checkbox
+        checked={enabled}
+        onChange={(v) => setForm({ ...form, scan_schedule_enabled: v })}
+        label={t('settings_schedule_enabled')}
+      />
+      <Field label={t('settings_schedule_time')}>
+        <Input type="time" className="w-32" value={local.time} onChange={(e) => setLocal(e.target.value, localDays)} />
+      </Field>
+      <Field as="div" label={t('settings_schedule_days')}>
+        <div className="flex flex-wrap gap-1.5">
           {WEEKDAYS.map((d) => (
-            <button
-              key={d.idx}
-              type="button"
-              onClick={() => toggleDay(d.idx)}
-              className={`h-8 w-10 rounded-lg text-xs font-medium transition ${
-                localDays.includes(d.idx)
-                  ? 'bg-gradient-to-br from-accent to-accent-2 text-bg'
-                  : 'border border-line bg-surface-3 text-ink-2 hover:text-ink-1'
-              }`}
-            >
+            <Toggle key={d.idx} pressed={localDays.includes(d.idx)} onChange={() => toggleDay(d.idx)} className="w-11 justify-center !px-0">
               {t(d.key)}
-            </button>
+            </Toggle>
           ))}
         </div>
-      </div>
-      <label className="flex items-center gap-2 text-sm text-ink-1">
-        <input
-          type="checkbox"
-          checked={Boolean(form.scan_schedule_cleanup_enabled)}
-          onChange={(e) => setForm({ ...form, scan_schedule_cleanup_enabled: e.target.checked })}
-        />
-        {t('settings_schedule_cleanup_enabled')}
-      </label>
+      </Field>
+      <Checkbox
+        checked={Boolean(form.scan_schedule_cleanup_enabled)}
+        onChange={(v) => setForm({ ...form, scan_schedule_cleanup_enabled: v })}
+        label={t('settings_schedule_cleanup_enabled')}
+      />
       <p className="text-xs text-ink-3">{t('settings_schedule_local_hint')}</p>
     </div>
   )
@@ -160,18 +138,14 @@ function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settin
   const enabled = Boolean(form.dir_watch_enabled)
 
   return (
-    <div className="flex flex-col gap-3 border-t border-line pt-4">
-      <span className="text-xs font-medium text-ink-2">{t('settings_dir_watch_title')}</span>
-      <label className="flex items-center gap-2 text-sm text-ink-1">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setForm({ ...form, dir_watch_enabled: e.target.checked })}
-        />
-        {t('settings_dir_watch_enabled')}
-      </label>
-      <label className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-ink-2">{t('settings_dir_watch_interval')}</span>
+    <div className="flex flex-col gap-4 border-t border-line pt-5">
+      <SectionTitle title={t('settings_dir_watch_title')} size="sm" className="!mb-0" />
+      <Checkbox
+        checked={enabled}
+        onChange={(v) => setForm({ ...form, dir_watch_enabled: v })}
+        label={t('settings_dir_watch_enabled')}
+      />
+      <Field label={t('settings_dir_watch_interval')} hint={t('settings_dir_watch_hint')}>
         <Input
           type="number"
           min={1}
@@ -179,8 +153,7 @@ function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settin
           value={(form.dir_watch_interval_minutes as number) ?? 5}
           onChange={(e) => setForm({ ...form, dir_watch_interval_minutes: e.target.value })}
         />
-      </label>
-      <p className="text-xs text-ink-3">{t('settings_dir_watch_hint')}</p>
+      </Field>
     </div>
   )
 }
@@ -190,15 +163,12 @@ function AutoStripFields({ form, setForm }: { form: Settings; setForm: (f: Setti
   const enabled = Boolean(form.metadata_auto_strip_enabled)
 
   return (
-    <div className="flex flex-col gap-3">
-      <label className="flex items-center gap-2 text-sm text-ink-1">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setForm({ ...form, metadata_auto_strip_enabled: e.target.checked })}
-        />
-        {t('settings_auto_strip_enabled')}
-      </label>
+    <div className="flex flex-col gap-2">
+      <Checkbox
+        checked={enabled}
+        onChange={(v) => setForm({ ...form, metadata_auto_strip_enabled: v })}
+        label={t('settings_auto_strip_enabled')}
+      />
       <p className="text-xs text-ink-3">{t('settings_auto_strip_hint')}</p>
     </div>
   )
@@ -229,34 +199,30 @@ function StashFields({ form, setForm }: { form: Settings; setForm: (f: Settings)
     }
   }
 
-  const text = (key: string, labelKey: string, props: Record<string, string> = {}) => (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-ink-2">{t(labelKey)}</span>
+  const text = (key: string, labelKey: string, props: Record<string, string> = {}, hintKey?: string) => (
+    <Field label={t(labelKey)} hint={hintKey ? t(hintKey) : undefined}>
       <Input
         {...props}
         value={String(form[key] ?? '')}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
       />
-    </label>
+    </Field>
   )
 
   return (
     <div className="flex flex-col gap-4">
-      <label className="flex items-center gap-2 text-sm text-ink-1">
-        <input
-          type="checkbox"
+      <div className="flex flex-col gap-2">
+        <Checkbox
           checked={Boolean(form.stash_enabled)}
-          onChange={(e) => setForm({ ...form, stash_enabled: e.target.checked })}
+          onChange={(v) => setForm({ ...form, stash_enabled: v })}
+          label={t('settings_stash_enabled')}
         />
-        {t('settings_stash_enabled')}
-      </label>
-      <p className="text-xs text-ink-3">{t('settings_stash_hint')}</p>
+        <p className="text-xs text-ink-3">{t('settings_stash_hint')}</p>
+      </div>
       {text('stash_url', 'settings_stash_url', { placeholder: 'http://<stash-host>:9999' })}
       {text('stash_api_key', 'settings_stash_api_key', { type: 'password', autoComplete: 'off' })}
-      {text('stash_media_path', 'settings_stash_media_path', { placeholder: '/data' })}
-      <p className="-mt-2 text-xs text-ink-3">{t('settings_stash_media_path_hint')}</p>
-      <label className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-ink-2">{t('settings_stash_delay')}</span>
+      {text('stash_media_path', 'settings_stash_media_path', { placeholder: '/data' }, 'settings_stash_media_path_hint')}
+      <Field label={t('settings_stash_delay')} hint={t('settings_stash_delay_hint')}>
         <Input
           type="number"
           min={0}
@@ -264,8 +230,7 @@ function StashFields({ form, setForm }: { form: Settings; setForm: (f: Settings)
           value={(form.stash_scan_delay_minutes as number) ?? 5}
           onChange={(e) => setForm({ ...form, stash_scan_delay_minutes: e.target.value })}
         />
-      </label>
-      <p className="-mt-2 text-xs text-ink-3">{t('settings_stash_delay_hint')}</p>
+      </Field>
       <div className="flex items-center gap-3">
         <Button type="button" size="sm" variant="subtle" onClick={runTest} disabled={testing || !form.stash_url}>
           {t('settings_stash_test')}
@@ -314,8 +279,7 @@ function FieldSection({
     <Card className="max-w-2xl p-6">
       <form onSubmit={onSave} className="flex flex-col gap-4">
         {fields.map((f) => (
-          <label key={f.key} className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-ink-2">{t(f.labelKey)}</span>
+          <Field key={f.key} label={t(f.labelKey)}>
             <Input
               type={f.key === 'media_root' ? 'text' : 'number'}
               // Without step="any" the browser's form validation rejects
@@ -324,10 +288,10 @@ function FieldSection({
               value={(form[f.key] as string | number) ?? ''}
               onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
             />
-          </label>
+          </Field>
         ))}
         {children}
-        <div className="mt-2 flex items-center gap-3">
+        <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-line pt-5">
           <Button type="submit" disabled={busy}>
             {t('save')}
           </Button>
@@ -409,15 +373,17 @@ export default function SettingsPage() {
     <div className="flex h-full flex-col">
       <PageHeader title={t('nav_settings')} />
 
-      <div className="flex min-h-0 flex-1 gap-6">
-        <nav className="w-48 shrink-0 space-y-1">
+      <div className="flex min-h-0 flex-1 flex-col gap-6 md:flex-row">
+        <nav className="flex shrink-0 gap-1 overflow-x-auto md:w-48 md:flex-col">
           {SECTIONS.map((s) => (
             <button
               key={s.key}
+              type="button"
               onClick={() => selectSection(s.key)}
-              className={`block w-full rounded-xl px-3.5 py-2.5 text-left text-[13.5px] font-medium transition ${
+              aria-current={section === s.key ? 'page' : undefined}
+              className={`shrink-0 whitespace-nowrap rounded-xl px-3.5 py-2.5 text-left text-[13px] font-medium transition md:w-full ${
                 section === s.key
-                  ? 'bg-gradient-to-br from-accent to-accent-2 text-bg shadow-glow'
+                  ? 'bg-surface-3 text-accent shadow-sm'
                   : 'text-ink-2 hover:bg-white/5 hover:text-ink-1'
               }`}
             >

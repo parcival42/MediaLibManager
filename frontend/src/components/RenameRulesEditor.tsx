@@ -8,9 +8,9 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, Card, Input } from './ui'
-import { IconChevron, IconFolder } from './icons'
-import DirectoryTree from './DirectoryTree'
+import { Badge, Button, Card, Checkbox, Field, Input, SectionTitle, Select, Textarea } from './ui'
+import { IconChevron } from './icons'
+import ScopePicker from './ScopePicker'
 
 type SegmentSource = 'literal' | 'dirname' | 'resolution' | 'duration' | 'filename'
 
@@ -113,58 +113,46 @@ function StripFilterForm({
   }
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-4">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_name')}</span>
-          <Input
-            value={draft.name}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            className="w-56"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_type')}</span>
-          <select
-            value={draft.type}
-            onChange={(e) => switchType(e.target.value as StripFilter['type'])}
-            className="h-9 rounded-xl border border-line bg-surface-3 px-3 text-sm text-ink-1 outline-none"
-          >
+        <Field label={t('ren_strip_filter_name')}>
+          <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="w-56" />
+        </Field>
+        <Field label={t('ren_strip_filter_type')}>
+          <Select value={draft.type} onChange={(e) => switchType(e.target.value as StripFilter['type'])}>
             <option value="strings">{t('ren_strip_filter_type_strings')}</option>
             <option value="replace_chars">{t('ren_strip_filter_type_replace_chars')}</option>
-          </select>
-        </label>
+          </Select>
+        </Field>
       </div>
 
       {draft.type === 'strings' && (
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
-          <textarea
+        <Field label={t('ren_strip_filter_entries')}>
+          <Textarea
             value={stringEntries.join('\n')}
             onChange={(e) => setDraft({ ...draft, entries: e.target.value.split('\n') })}
             rows={6}
-            className="w-full resize-y rounded-xl border border-line bg-surface-3 px-3 py-2 font-mono text-xs text-ink-1 outline-none"
           />
-        </label>
+        </Field>
       )}
 
       {draft.type === 'replace_chars' && (
         <div className="space-y-2">
-          <span className="text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
+          <span className="block text-xs font-medium text-ink-2">{t('ren_strip_filter_entries')}</span>
           {replaceEntries.map((entry, i) => (
             <div key={i} className="flex items-center gap-2">
               <Input
                 value={entry.from}
                 onChange={(e) => updateReplaceEntry(i, { from: e.target.value })}
                 placeholder={t('ren_strip_filter_replace_from')}
-                className="h-8 w-24 font-mono text-xs"
+                inputSize="sm" className="w-24 font-mono"
               />
               <span className="text-xs text-ink-3">→</span>
               <Input
                 value={entry.to}
                 onChange={(e) => updateReplaceEntry(i, { to: e.target.value })}
                 placeholder={t('ren_strip_filter_replace_to')}
-                className="h-8 w-24 font-mono text-xs"
+                inputSize="sm" className="w-24 font-mono"
               />
               <Button size="sm" variant="ghost" onClick={() => removeReplaceEntry(i)}>
                 {t('ren_segment_remove')}
@@ -225,105 +213,112 @@ function SegmentEditor({
   stripFilters: StripFilter[]
 }) {
   const { t } = useI18n()
+
+  const toggleTransform = (name: string, on: boolean) => {
+    const set = new Set(segment.transforms ?? [])
+    if (on) set.add(name)
+    else set.delete(name)
+    onChange({ ...segment, transforms: [...set] })
+  }
+  const toggleFilter = (id: number, on: boolean) => {
+    const set = new Set(segment.strip_filter_ids ?? [])
+    if (on) set.add(id)
+    else set.delete(id)
+    onChange({ ...segment, strip_filter_ids: [...set] })
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg/40 p-2.5">
-      <select
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-bg/40 p-2.5">
+      <Select
+        inputSize="sm"
         value={segment.source}
         onChange={(e) => onChange(emptySegment(e.target.value as SegmentSource))}
-        className="h-8 rounded-lg border border-line bg-surface-3 px-2 text-xs text-ink-1 outline-none"
+        aria-label={t('ren_segment_source')}
       >
         {SOURCES.map((s) => (
           <option key={s} value={s}>
             {t(`ren_segment_${s}`)}
           </option>
         ))}
-      </select>
+      </Select>
 
       {segment.source === 'literal' && (
         <Input
           value={segment.text ?? ''}
           onChange={(e) => onChange({ ...segment, text: e.target.value })}
           placeholder={t('ren_segment_text')}
-          className="h-8 w-40 text-xs"
+          aria-label={t('ren_segment_text')}
+          inputSize="sm"
+          className="w-40"
         />
       )}
 
       {segment.source === 'dirname' && (
         <label className="flex items-center gap-1.5 text-xs text-ink-3">
           {t('ren_segment_level')}
-          <input
+          <Input
             type="number"
             min={1}
+            inputSize="sm"
             value={segment.level ?? 1}
             onChange={(e) => onChange({ ...segment, level: Math.max(1, Number(e.target.value)) })}
-            className="h-8 w-16 rounded-lg border border-line bg-surface-3 px-2 text-xs text-ink-1 outline-none"
+            className="w-16"
           />
         </label>
       )}
 
       {segment.source === 'filename' && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={(segment.transforms ?? []).includes('clean_special_chars')}
-              onChange={(e) => {
-                const set = new Set(segment.transforms ?? [])
-                e.target.checked ? set.add('clean_special_chars') : set.delete('clean_special_chars')
-                onChange({ ...segment, transforms: [...set] })
-              }}
-            />
-            {t('ren_segment_clean_special_chars')}
-          </label>
-          <label className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={(segment.transforms ?? []).includes('strip_resolution')}
-              onChange={(e) => {
-                const set = new Set(segment.transforms ?? [])
-                e.target.checked ? set.add('strip_resolution') : set.delete('strip_resolution')
-                onChange({ ...segment, transforms: [...set] })
-              }}
-            />
-            {t('ren_segment_strip_resolution')}
-          </label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <Checkbox
+            className="!text-xs"
+            checked={(segment.transforms ?? []).includes('clean_special_chars')}
+            onChange={(v) => toggleTransform('clean_special_chars', v)}
+            label={t('ren_segment_clean_special_chars')}
+          />
+          <Checkbox
+            className="!text-xs"
+            checked={(segment.transforms ?? []).includes('strip_resolution')}
+            onChange={(v) => toggleTransform('strip_resolution', v)}
+            label={t('ren_segment_strip_resolution')}
+          />
           {stripFilters.length > 0 && (
-            <span className="border-l border-line pl-4 font-medium text-ink-2">{t('ren_segment_strip_filters_label')}:</span>
+            <span className="border-l border-line pl-4 text-xs font-medium text-ink-2">
+              {t('ren_segment_strip_filters_label')}:
+            </span>
           )}
           {stripFilters.map((f) => (
-            <label key={f.id} className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={(segment.strip_filter_ids ?? []).includes(f.id)}
-                onChange={(e) => {
-                  const set = new Set(segment.strip_filter_ids ?? [])
-                  e.target.checked ? set.add(f.id) : set.delete(f.id)
-                  onChange({ ...segment, strip_filter_ids: [...set] })
-                }}
-              />
-              {f.name}
-            </label>
+            <Checkbox
+              key={f.id}
+              className="!text-xs"
+              checked={(segment.strip_filter_ids ?? []).includes(f.id)}
+              onChange={(v) => toggleFilter(f.id, v)}
+              label={f.name}
+            />
           ))}
         </div>
       )}
 
       <div className="ml-auto flex items-center gap-1">
-        <button
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={() => onMove(-1)}
           disabled={!canMoveUp}
           title={t('ren_segment_up')}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-white/5 hover:text-ink-1 disabled:opacity-30"
+          aria-label={t('ren_segment_up')}
         >
           <IconChevron className="rotate-180" />
-        </button>
-        <button
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={() => onMove(1)}
           disabled={!canMoveDown}
           title={t('ren_segment_down')}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-white/5 hover:text-ink-1 disabled:opacity-30"
+          aria-label={t('ren_segment_down')}
         >
           <IconChevron />
-        </button>
+        </Button>
         <Button size="sm" variant="ghost" onClick={onRemove}>
           {t('ren_segment_remove')}
         </Button>
@@ -364,20 +359,18 @@ function RuleForm({
   const addSegment = () => setDraft((d) => ({ ...d, segments: [...d.segments, emptySegment('literal')] }))
 
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="space-y-4 p-4">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_rule_name')}</span>
+        <Field label={t('ren_rule_name')}>
           <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="w-56" />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_rule_separator')}</span>
+        </Field>
+        <Field label={t('ren_rule_separator')}>
           <Input
             value={draft.separator}
             onChange={(e) => setDraft({ ...draft, separator: e.target.value })}
             className="w-24"
           />
-        </label>
+        </Field>
       </div>
 
       <div className="space-y-2">
@@ -423,7 +416,6 @@ export default function RenameRulesEditor() {
   const qc = useQueryClient()
   const [editingRule, setEditingRule] = useState<Rule | null>(null)
   const [editingFilter, setEditingFilter] = useState<StripFilter | null>(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
   const [newAssignmentDir, setNewAssignmentDir] = useState<string | null>(null)
   const [newAssignmentRule, setNewAssignmentRule] = useState<number | null>(null)
 
@@ -507,8 +499,7 @@ export default function RenameRulesEditor() {
       {/* Strip filters                                                        */}
       {/* ------------------------------------------------------------------ */}
       <div>
-        <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_strip_filters_title')}</h2>
-        <p className="mb-3 text-sm text-ink-3">{t('ren_strip_filters_subtitle')}</p>
+        <SectionTitle title={t('ren_strip_filters_title')} description={t('ren_strip_filters_subtitle')} />
 
         <div className="space-y-3">
           {stripFilters.map((f) =>
@@ -567,8 +558,7 @@ export default function RenameRulesEditor() {
       {/* Rename rules                                                         */}
       {/* ------------------------------------------------------------------ */}
       <div>
-        <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_rules_title')}</h2>
-        <p className="mb-3 text-sm text-ink-3">{t('ren_rules_subtitle')}</p>
+        <SectionTitle title={t('ren_rules_title')} description={t('ren_rules_subtitle')} />
 
         <div className="space-y-3">
           {(rules.data ?? []).map((r) =>
@@ -626,31 +616,19 @@ export default function RenameRulesEditor() {
       {/* Directory assignments                                                */}
       {/* ------------------------------------------------------------------ */}
       <div>
-        <h2 className="mb-1 text-lg font-semibold text-ink-1">{t('ren_assignments_title')}</h2>
-        <p className="mb-3 text-sm text-ink-3">{t('ren_assignments_subtitle')}</p>
+        <SectionTitle title={t('ren_assignments_title')} description={t('ren_assignments_subtitle')} />
 
         <Card className="flex flex-wrap items-center gap-3 p-3">
-          <div className="relative">
-            <Button size="sm" variant="subtle" onClick={() => setPickerOpen((o) => !o)}>
-              <IconFolder width={15} height={15} />
-              {newAssignmentDir ?? t('ren_choose_directory')}
-            </Button>
-            {pickerOpen && (
-              <div className="absolute left-0 top-full z-20 mt-2 max-h-80 w-80 overflow-auto rounded-xl border border-line bg-surface-2 p-2 shadow-card">
-                <DirectoryTree
-                  value={newAssignmentDir}
-                  onSelect={(p) => {
-                    setNewAssignmentDir(p)
-                    setPickerOpen(false)
-                  }}
-                />
-              </div>
-            )}
-          </div>
-          <select
+          <ScopePicker
+            value={newAssignmentDir}
+            onChange={setNewAssignmentDir}
+            emptyLabel={t('ren_choose_directory')}
+          />
+          <Select
+            inputSize="sm"
             value={newAssignmentRule ?? ''}
             onChange={(e) => setNewAssignmentRule(Number(e.target.value) || null)}
-            className="h-9 rounded-xl border border-line bg-surface-3 px-3 text-sm text-ink-1 outline-none"
+            aria-label={t('ren_rule_label')}
           >
             <option value="">{t('ren_rule_label')}</option>
             {(rules.data ?? []).map((r) => (
@@ -658,7 +636,7 @@ export default function RenameRulesEditor() {
                 {r.name}
               </option>
             ))}
-          </select>
+          </Select>
           <Button
             size="sm"
             disabled={!newAssignmentDir || !newAssignmentRule}
@@ -678,9 +656,7 @@ export default function RenameRulesEditor() {
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-2" title={a.directory}>
                 {a.directory}
               </span>
-              <span className="shrink-0 rounded-md border border-line bg-bg/60 px-2 py-0.5 text-xs text-ink-2">
-                {a.rule_name}
-              </span>
+              <Badge tone="neutral">{a.rule_name}</Badge>
               <Button size="sm" variant="ghost" onClick={() => deleteAssignment.mutate(a.id)}>
                 {t('ren_segment_remove')}
               </Button>

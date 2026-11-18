@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { formatSize, formatDuration, TYPE_ICON } from '../utils'
-import { Button } from './ui'
+import { formatSize, formatDuration } from '../utils'
+import { Button, buttonClass, Input, Modal, Notice } from './ui'
+import { IconDownload, IconEdit, IconRefresh, IconX, TYPE_ICON_COMP } from './icons'
 
 export interface FileItem {
   id: number
@@ -26,6 +27,7 @@ export default function MediaDetail({ item, onClose }: { item: FileItem; onClose
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const src = `/api/media/${item.id}`
+  const TypeIcon = TYPE_ICON_COMP[item.type] ?? TYPE_ICON_COMP.other
 
   const [filename, setFilename] = useState(item.filename)
   const [path, setPath] = useState(item.path)
@@ -82,121 +84,117 @@ export default function MediaDetail({ item, onClose }: { item: FileItem; onClose
     return <p className="text-sm text-ink-3">{t('no_preview')}</p>
   }
 
+  const status = item.enrich_status
+
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-line bg-surface-2 p-5"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-start justify-between gap-4">
-          {renaming ? (
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="shrink-0">{TYPE_ICON[item.type] ?? TYPE_ICON.other}</span>
-              <input
-                autoFocus
-                value={renameInput}
-                onChange={(e) => setRenameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitRename()
-                  if (e.key === 'Escape') setRenaming(false)
-                }}
-                className="min-w-0 flex-1 rounded-lg border border-line bg-surface-1 px-2 py-1 text-sm"
-              />
-              <Button size="sm" onClick={submitRename} disabled={rename.isPending}>
-                {t('rename_confirm')}
-              </Button>
-              <Button size="sm" variant="subtle" onClick={() => setRenaming(false)}>
-                {t('rename_cancel')}
-              </Button>
-            </div>
-          ) : (
-            <h2 className="break-all text-base font-medium">
-              <span className="mr-2">{TYPE_ICON[item.type] ?? TYPE_ICON.other}</span>
-              {filename}
-            </h2>
-          )}
-          <button onClick={onClose} className="shrink-0 text-ink-2 hover:text-ink-1">
-            ✕ {t('close')}
-          </button>
-        </div>
-
-        {rename.isError && (
-          <p className="mb-3 text-xs text-danger">
-            {(rename.error as Error)?.message || t('rename_conflict')}
-          </p>
-        )}
-
-        <div className="mb-4 grid place-items-center">{renderMedia()}</div>
-
-        {item.error && (
-          <div className="mb-4 rounded-lg border border-danger/40 bg-danger/10 p-3">
-            <div className="mb-1 text-xs font-medium text-danger">{t('enrich_error')}</div>
-            <p className="break-all font-mono text-xs text-ink-2">{item.error}</p>
+    <Modal onClose={onClose} label={filename} className="max-w-3xl">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        {renaming ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <TypeIcon className="shrink-0 text-ink-3" />
+            <Input
+              autoFocus
+              inputSize="sm"
+              value={renameInput}
+              onChange={(e) => setRenameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitRename()
+                // Escape cancels the inline rename; stopping propagation keeps
+                // the dialog's own Escape handler from closing it as well.
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  setRenaming(false)
+                }
+              }}
+              aria-label={t('rename_placeholder')}
+              className="min-w-0 flex-1"
+            />
+            <Button size="sm" onClick={submitRename} disabled={rename.isPending}>
+              {t('rename_confirm')}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRenaming(false)}>
+              {t('rename_cancel')}
+            </Button>
           </div>
+        ) : (
+          <h2 className="flex min-w-0 items-start gap-2 break-all font-head text-base font-semibold">
+            <TypeIcon className="mt-0.5 shrink-0 text-ink-3" />
+            {filename}
+          </h2>
         )}
-
-        <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
-          {item.enrich_status ? (
-            <>
-              <dt className="text-ink-3">{t('status')}</dt>
-              <dd className="font-mono text-ink-2">{item.enrich_status}</dd>
-            </>
-          ) : null}
-          <dt className="text-ink-3">{t('size')}</dt>
-          <dd className="font-mono text-ink-2">{formatSize(item.size)}</dd>
-          {item.width ? (
-            <>
-              <dt className="text-ink-3">{t('detail_resolution')}</dt>
-              <dd className="font-mono text-ink-2">
-                {item.width}×{item.height}
-              </dd>
-            </>
-          ) : null}
-          {item.duration ? (
-            <>
-              <dt className="text-ink-3">{t('detail_duration')}</dt>
-              <dd className="font-mono text-ink-2">{formatDuration(item.duration)}</dd>
-            </>
-          ) : null}
-          <dt className="text-ink-3">{t('detail_path')}</dt>
-          <dd className="break-all font-mono text-ink-3">{path}</dd>
-        </dl>
-
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <a
-            href={src}
-            download={filename}
-            className="inline-block rounded-lg border border-line px-3 py-1.5 text-sm text-ink-2 hover:text-ink-1"
-          >
-            ↓ {t('download')}
-          </a>
-          <Button
-            variant="subtle"
-            size="sm"
-            onClick={() => {
-              setRenameInput(filename)
-              setRenaming(true)
-            }}
-            disabled={renaming}
-          >
-            ✎ {t('rename_action')}
-          </Button>
-          <Button
-            variant="subtle"
-            size="sm"
-            onClick={() => reenrich.mutate()}
-            disabled={reenrich.isPending}
-          >
-            ↻ {t('reenrich')}
-          </Button>
-          {reenrich.isSuccess && (
-            <span className="text-xs text-accent">{t('reenrich_queued')}</span>
-          )}
-        </div>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          <IconX />
+          {t('close')}
+        </Button>
       </div>
-    </div>
+
+      {rename.isError && (
+        <div className="mb-3">
+          <Notice>{(rename.error as Error)?.message || t('rename_conflict')}</Notice>
+        </div>
+      )}
+
+      <div className="mb-4 grid place-items-center">{renderMedia()}</div>
+
+      {item.error && (
+        <div className="mb-4">
+          <Notice>
+            <div className="mb-1 text-xs font-semibold">{t('enrich_error')}</div>
+            <p className="break-all font-mono text-xs text-ink-2">{item.error}</p>
+          </Notice>
+        </div>
+      )}
+
+      <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
+        {status ? (
+          <>
+            <dt className="text-ink-3">{t('status')}</dt>
+            <dd className="text-ink-2">{t(`enrich_status_${status}`)}</dd>
+          </>
+        ) : null}
+        <dt className="text-ink-3">{t('size')}</dt>
+        <dd className="tabular-nums text-ink-2">{formatSize(item.size)}</dd>
+        {item.width ? (
+          <>
+            <dt className="text-ink-3">{t('detail_resolution')}</dt>
+            <dd className="tabular-nums text-ink-2">
+              {item.width}×{item.height}
+            </dd>
+          </>
+        ) : null}
+        {item.duration ? (
+          <>
+            <dt className="text-ink-3">{t('detail_duration')}</dt>
+            <dd className="tabular-nums text-ink-2">{formatDuration(item.duration)}</dd>
+          </>
+        ) : null}
+        <dt className="text-ink-3">{t('detail_path')}</dt>
+        <dd className="break-all font-mono text-xs leading-5 text-ink-3">{path}</dd>
+      </dl>
+
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <a href={src} download={filename} className={buttonClass('subtle', 'sm')}>
+          <IconDownload />
+          {t('download')}
+        </a>
+        <Button
+          variant="subtle"
+          size="sm"
+          onClick={() => {
+            setRenameInput(filename)
+            setRenaming(true)
+          }}
+          disabled={renaming}
+        >
+          <IconEdit />
+          {t('rename_action')}
+        </Button>
+        <Button variant="subtle" size="sm" onClick={() => reenrich.mutate()} disabled={reenrich.isPending}>
+          <IconRefresh />
+          {t('reenrich')}
+        </Button>
+        {reenrich.isSuccess && <span className="text-xs text-accent">{t('reenrich_queued')}</span>}
+      </div>
+    </Modal>
   )
 }

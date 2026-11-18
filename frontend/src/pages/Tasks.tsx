@@ -7,7 +7,17 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, PageHeader } from '../components/ui'
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  LoadingPane,
+  PageHeader,
+  ProgressBar,
+  SectionTitle,
+  type Tone,
+} from '../components/ui'
 import { IconChevron } from '../components/icons'
 import { formatDuration } from '../utils'
 
@@ -62,13 +72,13 @@ interface DirWatchStatus {
 
 const ACTIVE = new Set(['queued', 'running'])
 
-const STATUS_STYLE: Record<string, string> = {
-  queued: 'text-ink-3 border-line',
-  running: 'text-accent border-accent/40',
-  done: 'text-accent border-accent/40',
-  error: 'text-danger border-danger/40',
-  cancelled: 'text-warn border-warn/40',
-  interrupted: 'text-warn border-warn/40',
+const STATUS_TONE: Record<string, Tone> = {
+  queued: 'neutral',
+  running: 'accent',
+  done: 'accent',
+  error: 'danger',
+  cancelled: 'warn',
+  interrupted: 'warn',
 }
 
 function fmtTime(ts?: number): string {
@@ -84,19 +94,10 @@ function fmtElapsed(t: Task): string {
 
 function StatusPill({ status }: { status: string }) {
   const { t } = useI18n()
-  const style = STATUS_STYLE[status] ?? 'text-ink-3 border-line'
-  const pulsing = status === 'running'
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${style}`}
-    >
-      <span
-        className={`h-1.5 w-1.5 rounded-full bg-current ${
-          pulsing ? 'animate-pulse shadow-[0_0_8px_currentColor]' : ''
-        }`}
-      />
+    <Badge tone={STATUS_TONE[status] ?? 'neutral'} dot pulse={status === 'running'}>
       {t(`task_status_${status}`)}
-    </span>
+    </Badge>
   )
 }
 
@@ -127,11 +128,13 @@ function TaskCard({ task }: { task: Task }) {
   const cancellable = ACTIVE.has(task.status)
 
   return (
-    <div className="rounded-2xl border border-line bg-surface-2">
+    <Card>
       <div className="flex items-center gap-3 px-4 py-3">
         <button
+          type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left"
         >
           <IconChevron
             className={`shrink-0 text-ink-3 transition-transform ${open ? 'rotate-0' : '-rotate-90'}`}
@@ -163,17 +166,7 @@ function TaskCard({ task }: { task: Task }) {
 
       {task.status === 'running' && (
         <div className="px-4 pb-3">
-          <div className="flex items-center gap-2">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg/70">
-              <div
-                className="h-full rounded-full bg-accent transition-all"
-                style={{ width: `${task.progress}%` }}
-              />
-            </div>
-            <span className="text-[11px] font-semibold tabular-nums text-ink-2">
-              {Math.round(task.progress)}%
-            </span>
-          </div>
+          <ProgressBar percent={task.progress} />
         </div>
       )}
 
@@ -193,7 +186,7 @@ function TaskCard({ task }: { task: Task }) {
           </div>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -235,10 +228,10 @@ function EnrichmentBlock() {
       ? `${t('enrichment')} · ${data.steps_pending.toLocaleString()} ${t('enrich_steps_remaining')}`
       : t('enrich_done')
 
-  const barColor = data.paused ? 'bg-warn' : data.pending ? 'bg-accent' : 'bg-accent/60'
+  const barTone = data.paused ? 'warn' : data.pending ? 'accent' : 'muted'
 
   return (
-    <div className="rounded-2xl border border-line bg-surface-2">
+    <Card>
       <div className="flex items-center gap-3 px-4 py-3">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
@@ -251,17 +244,7 @@ function EnrichmentBlock() {
         />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-ink-1">{label}</div>
-          <div className="mt-1.5 flex items-center gap-2">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg/70">
-              <div
-                className={`h-full rounded-full transition-all ${barColor}`}
-                style={{ width: `${data.percent}%` }}
-              />
-            </div>
-            <span className="text-[11px] font-semibold tabular-nums text-ink-2">
-              {Math.round(data.percent)}%
-            </span>
-          </div>
+          <ProgressBar percent={data.percent} tone={barTone} className="mt-1.5" />
           {data.active && !data.paused && data.frontier_stage !== null && (
             <div className="mt-1.5 text-[11px] text-ink-3">
               <div className="flex items-baseline justify-between gap-4">
@@ -285,7 +268,9 @@ function EnrichmentBlock() {
 
       {data.error > 0 && (
         <button
+          type="button"
           onClick={() => setErrorsOpen((v) => !v)}
+          aria-expanded={errorsOpen}
           className="flex w-full items-center gap-2 border-t border-line px-4 py-2 text-left text-xs font-medium text-danger transition hover:bg-surface-3"
         >
           <IconChevron
@@ -318,7 +303,7 @@ function EnrichmentBlock() {
           ))}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -337,7 +322,7 @@ function DirWatchBlock() {
   if (!data?.enabled) return null
 
   return (
-    <div className="rounded-2xl border border-line bg-surface-2 px-4 py-3">
+    <Card className="px-4 py-3">
       <div className="text-sm font-medium text-ink-1">{t('settings_dir_watch_title')}</div>
       <div className="mt-1.5 space-y-0.5 text-[11px] text-ink-3">
         <div>
@@ -362,7 +347,7 @@ function DirWatchBlock() {
           {t('settings_dir_watch_error')}: {data.last_error}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -415,40 +400,42 @@ export default function Tasks() {
         <EnrichmentBlock />
         <DirWatchBlock />
 
-        <section className="space-y-2.5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
-            {t('tasks_section_queue')}
-          </h2>
-          {queue.length === 0 ? (
-            <EmptyState text={t('tasks_queue_empty')} />
-          ) : (
-            <div className="space-y-2.5">
-              {queue.map((task) => (
-                <TaskCard key={task.id} task={task} />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-2.5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
-            {t('tasks_section_history')}
-          </h2>
-          {history.length === 0 ? (
-            <EmptyState text={t('tasks_none')} />
-          ) : (
-            <div className="space-y-2.5">
-              {history.map((task) => (
-                <TaskCard key={task.id} task={task} />
-              ))}
-              {hasMore && (
-                <Button variant="subtle" size="sm" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? t('tasks_loading_more') : t('tasks_load_more')}
-                </Button>
+        {!data ? (
+          <LoadingPane />
+        ) : (
+          <>
+            <section>
+              <SectionTitle title={t('tasks_section_queue')} />
+              {queue.length === 0 ? (
+                <EmptyState text={t('tasks_queue_empty')} />
+              ) : (
+                <div className="space-y-2.5">
+                  {queue.map((task) => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
+                </div>
               )}
-            </div>
-          )}
-        </section>
+            </section>
+
+            <section>
+              <SectionTitle title={t('tasks_section_history')} />
+              {history.length === 0 ? (
+                <EmptyState text={t('tasks_none')} />
+              ) : (
+                <div className="space-y-2.5">
+                  {history.map((task) => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
+                  {hasMore && (
+                    <Button variant="subtle" size="sm" onClick={loadMore} disabled={loadingMore}>
+                      {loadingMore ? t('tasks_loading_more') : t('tasks_load_more')}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </section>
+          </>
+        )}
       </div>
     </div>
   )

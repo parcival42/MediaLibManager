@@ -8,6 +8,39 @@ body,
   height: 100%;
 }
 
+/* Native controls (checkboxes, select menus, date/time pickers) render dark. */
+html {
+  color-scheme: dark;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: theme('colors.accent.DEFAULT');
+  cursor: pointer;
+}
+
+/* One visible keyboard focus style for every interactive element. Text
+   controls keep their own border ring instead (see Input in ui.tsx). */
+:focus-visible {
+  outline: 2px solid theme('colors.accent.DEFAULT');
+  outline-offset: 2px;
+}
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 body {
   @apply bg-bg text-ink-1 font-ui antialiased;
   /* Soft atmospheric glow so the dark base never reads as flat black. */

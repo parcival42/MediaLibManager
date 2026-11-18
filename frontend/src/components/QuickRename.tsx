@@ -1,11 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, Input, PageHeader, Segmented, Spinner } from './ui'
-import { IconFolder } from './icons'
-import DirectoryTree from './DirectoryTree'
+import {
+  Badge,
+  Button,
+  Checkbox,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Segmented,
+  SelectionBar,
+  Spinner,
+  Textarea,
+} from './ui'
+import ScopePicker from './ScopePicker'
 import { TaskProgressPanel, useTaskPolling } from './TaskProgress'
 import { usePreviewTask } from './usePreviewTask'
 
@@ -44,16 +55,6 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
   const { t } = useI18n()
 
   const [scope, setScope] = useState<string | null>(null)
-  const [treeOpen, setTreeOpen] = useState(false)
-  const treeRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!treeOpen) return
-    const onClick = (e: globalThis.MouseEvent) => {
-      if (treeRef.current && !treeRef.current.contains(e.target as Node)) setTreeOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [treeOpen])
 
   const [termsText, setTermsText] = useState('')
   const [mode, setMode] = useState<QuickMode>('remove')
@@ -176,48 +177,22 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
     <div className="flex h-full flex-col">
       <PageHeader title={t('nav_rename')} subtitle={t('ren_quick_subtitle')} actions={tabs} />
 
-      <div className="mb-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-2">{t('ren_quick_terms')}</span>
-          <textarea
+      <div className="mb-6 grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <Field label={t('ren_quick_terms')} hint={t('ren_quick_terms_hint')}>
+          <Textarea
             value={termsText}
             onChange={(e) => setTermsText(e.target.value)}
             rows={5}
             placeholder={t('ren_quick_terms_placeholder')}
-            className="w-full resize-y rounded-xl border border-line bg-surface-3 px-3 py-2 font-mono text-xs text-ink-1 outline-none placeholder:text-ink-3"
           />
-          <span className="text-xs text-ink-3">{t('ren_quick_terms_hint')}</span>
-        </label>
+        </Field>
 
-        <div className="flex flex-col gap-3">
-          <div className="relative" ref={treeRef}>
-            <span className="mb-1 block text-xs font-medium text-ink-2">{t('ren_quick_directory')}</span>
-            <Button size="sm" variant="subtle" onClick={() => setTreeOpen((o) => !o)}>
-              <IconFolder width={15} height={15} />
-              {scope ?? t('dup_scope_all')}
-            </Button>
-            {treeOpen && (
-              <div className="absolute left-0 top-full z-20 mt-2 max-h-80 w-80 overflow-auto rounded-xl border border-line bg-surface-2 p-2 shadow-card">
-                <DirectoryTree
-                  value={scope}
-                  onSelect={(p) => {
-                    setScope(p)
-                    setTreeOpen(false)
-                  }}
-                />
-              </div>
-            )}
-          </div>
+        <div className="flex flex-col gap-4">
+          <Field as="div" label={t('ren_quick_directory')}>
+            <ScopePicker value={scope} onChange={setScope} />
+          </Field>
 
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            <input
-              type="checkbox"
-              checked={recursive}
-              onChange={(e) => setRecursive(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            {t('ren_quick_recursive')}
-          </label>
+          <Checkbox checked={recursive} onChange={setRecursive} label={t('ren_quick_recursive')} />
 
           <div className="flex flex-wrap items-center gap-3">
             <Segmented<QuickMode>
@@ -233,6 +208,7 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
                 placeholder={t('ren_quick_replacement')}
+                aria-label={t('ren_quick_replacement')}
                 className="w-48"
               />
             )}
@@ -251,43 +227,41 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
       </div>
 
       {resultQuery.data && !previewBusy && (
-        <>
-          <div className="mb-2 flex flex-wrap items-center gap-4 text-sm text-ink-3">
-            <span>
-              {renames.length.toLocaleString()} {t('ren_quick_affected')}
-            </span>
-            {collisionCount > 0 && (
-              <span className="rounded-full bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">
-                {collisionCount} {t('ren_collisions')}
+        <SelectionBar
+          summary={
+            <>
+              <span>
+                {renames.length.toLocaleString()} {t('ren_quick_affected')}
               </span>
-            )}
-            {formChanged && <span className="text-xs text-warn">{t('ren_quick_stale')}</span>}
-          </div>
-
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            {renames.length > 0 && (
+              {collisionCount > 0 && (
+                <Badge tone="warn">
+                  {collisionCount} {t('ren_collisions')}
+                </Badge>
+              )}
+              {formChanged && <span className="text-xs text-warn">{t('ren_quick_stale')}</span>}
+            </>
+          }
+          actions={
+            <>
               <Button
                 size="sm"
                 variant="subtle"
                 onClick={() => setSelected(new Set(renames.map((r) => r.file_id)))}
+                disabled={renames.length === 0}
               >
                 {t('ren_select_all')}
               </Button>
-            )}
-            {selected.size > 0 && (
-              <Button size="sm" variant="subtle" onClick={() => setSelected(new Set())}>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
                 {t('dup_deselect_all')}
               </Button>
-            )}
-            {selected.size > 0 && (
-              <Button size="sm" onClick={onApply} disabled={applying}>
+              <Button size="sm" onClick={onApply} disabled={applying || selected.size === 0}>
                 {applying
                   ? `${t('ren_applying')} ${Math.round(applyTask.data?.progress ?? 0)}%`
                   : `${t('ren_apply')} (${selected.size})`}
               </Button>
-            )}
-          </div>
-        </>
+            </>
+          }
+        />
       )}
 
       {previewBusy ? (
@@ -317,11 +291,11 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
                       <span className="min-w-0 flex-1 truncate font-mono" title={entry.dir}>
                         {entry.dir}
                       </span>
-                      <button onClick={() => toggleGroup(entry.items)} className="shrink-0 text-accent hover:underline">
+                      <Button variant="link" onClick={() => toggleGroup(entry.items)}>
                         {entry.items.every((i) => selected.has(i.file_id))
                           ? t('ren_deselect_group')
                           : t('ren_select_group')}
-                      </button>
+                      </Button>
                     </div>
                   ) : (
                     <label
@@ -333,17 +307,13 @@ export default function QuickRename({ tabs }: { tabs: ReactNode }) {
                         type="checkbox"
                         checked={selected.has(entry.item.file_id)}
                         onChange={() => toggle(entry.item.file_id)}
-                        className="mt-1 h-3.5 w-3.5 shrink-0"
+                        className="mt-0.5 h-4 w-4 shrink-0"
                       />
                       <div className="min-w-0 flex-1 space-y-0.5">
-                        <div className="break-all text-ink-2">{entry.item.current_name}</div>
+                        <div className="break-all text-ink-3">{entry.item.current_name}</div>
                         <div className="break-all text-ink-1">{entry.item.new_name}</div>
                       </div>
-                      {entry.item.collision && (
-                        <span className="shrink-0 rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
-                          {t('ren_collision_badge')}
-                        </span>
-                      )}
+                      {entry.item.collision && <Badge tone="warn">{t('ren_collision_badge')}</Badge>}
                     </label>
                   )}
                 </div>
