@@ -30,7 +30,7 @@ def _clean_special_chars(raw: str) -> str:
     return re.sub(r"_+", "_", cleaned).strip("_")
 
 
-def _word_pattern(term: str) -> str:
+def word_pattern(term: str) -> str:
     """Match ``term`` as a standalone token, guarded by a boundary only on a
     side where the term's own edge character is alphanumeric.
 
@@ -64,7 +64,7 @@ def _apply_strip_filter(stem: str, f: dict) -> str:
     if f.get("type") == "strings":
         for term in entries:
             if term:
-                stem = re.sub(_word_pattern(term), "", stem, flags=re.I)
+                stem = re.sub(word_pattern(term), "", stem, flags=re.I)
     elif f.get("type") == "replace_chars":
         for entry in entries:
             src, dst = entry.get("from", ""), entry.get("to", "")

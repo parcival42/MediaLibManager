@@ -199,6 +199,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   task_status_interrupted: { de: 'Unterbrochen', en: 'Interrupted' },
   task_type_rename: { de: 'Umbenennen', en: 'Rename' },
   task_type_rename_preview: { de: 'Umbenenn-Vorschau', en: 'Rename preview' },
+  task_type_rename_quick_preview: { de: 'Schnellbearbeitung-Vorschau', en: 'Quick edit preview' },
   task_type_metadata_strip: { de: 'Metadaten entfernen', en: 'Strip metadata' },
   task_type_maintenance_cleanup: { de: 'Datenbank-Cleanup', en: 'Database cleanup' },
 
@@ -226,6 +227,31 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   ren_collision_badge: { de: 'Kollision', en: 'Collision' },
   ren_rule_label: { de: 'Regel', en: 'Rule' },
   ren_pending_section: { de: 'Wartet auf Anreicherung', en: 'Pending enrichment' },
+
+  ren_tab_rules: { de: 'Regeln', en: 'Rules' },
+  ren_tab_quick: { de: 'Schnellbearbeitung', en: 'Quick edit' },
+  ren_quick_subtitle: {
+    de: 'Wörter, Phrasen oder Zeichen aus Dateinamen eines Verzeichnisses entfernen oder ersetzen.',
+    en: 'Remove or replace words, phrases or characters in the filenames of a directory.',
+  },
+  ren_quick_terms: { de: 'Begriffe (einer pro Zeile)', en: 'Terms (one per line)' },
+  ren_quick_terms_placeholder: { de: 'z. B.\n1080p\n[Sample]\n_', en: 'e.g.\n1080p\n[Sample]\n_' },
+  ren_quick_terms_hint: {
+    de: 'Groß-/Kleinschreibung egal. Wörter werden nur als ganzes Wort getroffen, Zeichen überall. Die Dateiendung bleibt erhalten.',
+    en: 'Case-insensitive. Words only match as whole words, characters match anywhere. The file extension is kept.',
+  },
+  ren_quick_directory: { de: 'Verzeichnis', en: 'Directory' },
+  ren_quick_recursive: { de: 'Unterverzeichnisse einbeziehen', en: 'Include subdirectories' },
+  ren_quick_mode_remove: { de: 'Entfernen', en: 'Remove' },
+  ren_quick_mode_replace: { de: 'Ersetzen', en: 'Replace' },
+  ren_quick_replacement: { de: 'Ersetzen durch…', en: 'Replace with…' },
+  ren_quick_preview: { de: 'Vorschau erstellen', en: 'Preview' },
+  ren_quick_affected: { de: 'betroffene Dateien', en: 'affected files' },
+  ren_quick_stale: {
+    de: 'Eingaben geändert. Die Liste zeigt noch die letzte Vorschau.',
+    en: 'Inputs changed. The list still shows the last preview.',
+  },
+  ren_quick_none: { de: 'Keine Dateien betroffen.', en: 'No files affected.' },
 
   ren_rules_title: { de: 'Umbenenn-Regeln', en: 'Rename rules' },
   ren_rules_subtitle: {

@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { Button, EmptyState, PageHeader, Segmented, Spinner } from '../components/ui'
 import { IconFolder } from '../components/icons'
 import DirectoryTree from '../components/DirectoryTree'
+import { TaskProgressPanel, useTaskPolling } from '../components/TaskProgress'
+import QuickRename from '../components/QuickRename'
 
 interface RenameItem {
   file_id: number
@@ -37,55 +39,27 @@ interface ApplyResult {
   renamed_ids: number[]
 }
 
-interface Task<R = unknown> {
-  status: string
-  progress: number
-  result?: R
-  log?: string
-}
-
 type FlatEntry = { kind: 'dir'; dir: string; items: RenameItem[] } | { kind: 'item'; item: RenameItem }
 
-/** Poll a task until it reaches a terminal state, then fire `onDone` once with
- * its final data (so the caller can act on `result` without a stale closure
- * over the hook's own return value). */
-function useTaskPolling<R = unknown>(taskId: string | null, onDone: (data: Task<R> | undefined) => void) {
-  const task = useQuery<Task<R>>({
-    queryKey: ['task', taskId],
-    queryFn: () => api<Task<R>>(`/api/tasks/${taskId}`),
-    enabled: !!taskId,
-    refetchInterval: (query) => {
-      if (query.state.error) return false
-      const s = query.state.data?.status
-      return s && s !== 'running' && s !== 'queued' ? false : 800
-    },
-  })
-  useEffect(() => {
-    const s = task.data?.status
-    if (s && s !== 'running' && s !== 'queued') onDone(task.data)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.data?.status])
-  return task
-}
-
-/** Centered progress bar with the task's latest log line as the "what is it doing" caption. */
-function TaskProgressPanel({ percent, activity }: { percent: number; activity: string }) {
-  return (
-    <div className="w-full max-w-sm text-center">
-      <Spinner className="mx-auto mb-4" />
-      <div className="mb-2 min-h-[1.25rem] text-sm text-ink-2">{activity}</div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg/70">
-        <div
-          className="h-full rounded-full bg-accent transition-all"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      <div className="mt-1.5 text-xs font-semibold tabular-nums text-ink-3">{Math.round(percent)}%</div>
-    </div>
-  )
-}
+type RenameTab = 'rules' | 'quick'
 
 export default function Rename() {
+  const { t } = useI18n()
+  const [tab, setTab] = useState<RenameTab>('rules')
+  const tabs = (
+    <Segmented<RenameTab>
+      value={tab}
+      onChange={setTab}
+      options={[
+        { value: 'rules', label: t('ren_tab_rules') },
+        { value: 'quick', label: t('ren_tab_quick') },
+      ]}
+    />
+  )
+  return tab === 'rules' ? <RuleRename tabs={tabs} /> : <QuickRename tabs={tabs} />
+}
+
+function RuleRename({ tabs }: { tabs: ReactNode }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -339,10 +313,13 @@ export default function Rename() {
         title={t('nav_rename')}
         subtitle={t('ren_subtitle')}
         actions={
-          <Button onClick={refreshPreview} disabled={previewBusy}>
-            {previewBusy && <Spinner className="h-3.5 w-3.5" />}
-            {previewBusy ? t('ren_previewing') : t('ren_refresh')}
-          </Button>
+          <>
+            {tabs}
+            <Button onClick={refreshPreview} disabled={previewBusy}>
+              {previewBusy && <Spinner className="h-3.5 w-3.5" />}
+              {previewBusy ? t('ren_previewing') : t('ren_refresh')}
+            </Button>
+          </>
         }
       />
 

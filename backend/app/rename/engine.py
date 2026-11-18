@@ -41,7 +41,7 @@ def get_cached_preview(task_id: str) -> dict | None:
         return _preview_cache.get(task_id)
 
 
-def _cache_preview(task_id: str, result: dict) -> None:
+def cache_preview(task_id: str, result: dict) -> None:
     with _preview_lock:
         _preview_cache[task_id] = result
         while len(_preview_cache) > _MAX_CACHED_PREVIEWS:
@@ -277,7 +277,7 @@ def preview(ctx, directory: str | None = None) -> dict:
 
     if not files:
         ctx.log("No files in scope.")
-        _cache_preview(ctx.task_id, {"renames": [], "pending": []})
+        cache_preview(ctx.task_id, {"renames": [], "pending": []})
         _remember_recent_preview(directory, ctx.task_id)
         return {"rename_count": 0, "pending_count": 0}
 
@@ -339,7 +339,7 @@ def preview(ctx, directory: str | None = None) -> dict:
 
     renames.sort(key=lambda r: r["path"])
     ctx.log(f"Done — {len(renames)} renames, {len(pending)} pending.")
-    _cache_preview(ctx.task_id, {"renames": renames, "pending": pending})
+    cache_preview(ctx.task_id, {"renames": renames, "pending": pending})
     _remember_recent_preview(directory, ctx.task_id)
     return {"rename_count": len(renames), "pending_count": len(pending)}
 
@@ -404,47 +404,63 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
                 skipped += 1
                 continue
 
-            old_path = Path(f["path"])
-            directory = old_path.parent
-
-            def taken(name: str) -> bool:
-                if name == current_name:
-                    return False
-                full = str(directory / name)
-                if os.path.exists(full):
-                    return True
-                return con.execute(
-                    "SELECT 1 FROM files WHERE path = ? AND id != ?", (full, fid)
-                ).fetchone() is not None
-
-            final_name = rules.next_free_name(target, taken)
-            if final_name == current_name:
+            outcome = rename_one(con, fid, f["path"], target, ctx)
+            if outcome == "renamed":
+                renamed += 1
+                renamed_ids.append(fid)
+            elif outcome == "error":
+                errors += 1
+            else:
                 skipped += 1
-                continue
-
-            new_path = directory / final_name
-            try:
-                old_path.rename(new_path)
-            except OSError as exc:
-                errors += 1
-                ctx.log(f"ERROR renaming {old_path.name}: {exc}")
-                continue
-
-            try:
-                con.execute("UPDATE files SET path = ? WHERE id = ?", (str(new_path), fid))
-                con.commit()
-            except sqlite3.Error as exc:
-                con.rollback()
-                new_path.rename(old_path)  # keep disk and DB from disagreeing
-                errors += 1
-                ctx.log(f"ERROR renaming {old_path.name}: {exc}")
-                continue
-
-            renamed += 1
-            renamed_ids.append(fid)
-            ctx.log(f"{current_name} -> {final_name}")
             ctx.progress(100 * i / total)
 
         return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
     finally:
         con.close()
+
+
+def rename_one(con, fid: int, path: str, target: str, ctx) -> str:
+    """Rename one file to ``target`` on disk and update its DB path.
+
+    Collisions are resolved against both the filesystem and the DB
+    (``files.path`` is UNIQUE regardless of ``present``), excluding the file's
+    own current name. A DB failure rolls the disk rename back so disk and DB
+    never disagree. Returns ``"renamed"``, ``"skipped"`` (resolved name equals
+    the current one) or ``"error"`` (logged to ``ctx``).
+    """
+    old_path = Path(path)
+    directory = old_path.parent
+    current_name = old_path.name
+
+    def taken(name: str) -> bool:
+        if name == current_name:
+            return False
+        full = str(directory / name)
+        if os.path.exists(full):
+            return True
+        return con.execute(
+            "SELECT 1 FROM files WHERE path = ? AND id != ?", (full, fid)
+        ).fetchone() is not None
+
+    final_name = rules.next_free_name(target, taken)
+    if final_name == current_name:
+        return "skipped"
+
+    new_path = directory / final_name
+    try:
+        old_path.rename(new_path)
+    except OSError as exc:
+        ctx.log(f"ERROR renaming {current_name}: {exc}")
+        return "error"
+
+    try:
+        con.execute("UPDATE files SET path = ? WHERE id = ?", (str(new_path), fid))
+        con.commit()
+    except sqlite3.Error as exc:
+        con.rollback()
+        new_path.rename(old_path)  # keep disk and DB from disagreeing
+        ctx.log(f"ERROR renaming {current_name}: {exc}")
+        return "error"
+
+    ctx.log(f"{current_name} -> {final_name}")
+    return "renamed"

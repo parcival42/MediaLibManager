@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import auth, db, paths
-from ..rename import engine
+from ..rename import engine, quick
 from ..tasks import runner
 
 router = APIRouter(prefix="/api/rename")
@@ -269,4 +269,77 @@ def apply_rename(req: ApplyRequest, _: str = Depends(auth.current_user)):
     ids = list(req.file_ids)
     task_id = runner.create_task("rename", {"count": len(ids)})
     runner.enqueue(task_id, lambda ctx: engine.apply_renames(ids, ctx))
+    return {"task_id": task_id}
+
+
+# --- Quick edit: rule-free remove/replace of terms in filenames -------------
+
+QUICK_MODES = {"remove", "replace"}
+# Characters that would turn a filename into a path (or are invalid in one).
+_FORBIDDEN_IN_NAME = ("/", "\\", "\0")
+
+
+class QuickParams(BaseModel):
+    directory: str | None = None
+    recursive: bool = False
+    terms: list[str]
+    mode: str = "remove"
+    replacement: str = ""
+
+
+class QuickApplyRequest(QuickParams):
+    file_ids: list[int]
+
+
+def _resolve_quick(req: QuickParams) -> tuple[str, list[str], str]:
+    """Validate quick-edit parameters; returns (directory, terms, replacement)."""
+    try:
+        scope = paths.resolve_within_root(req.directory)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="directory outside media root")
+    if not scope.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+    if req.mode not in QUICK_MODES:
+        raise HTTPException(status_code=400, detail=f"invalid mode: {req.mode}")
+    terms = quick.normalize_terms(req.terms)
+    if not terms:
+        raise HTTPException(status_code=400, detail="no terms given")
+    replacement = req.replacement if req.mode == "replace" else ""
+    if any(c in replacement for c in _FORBIDDEN_IN_NAME):
+        raise HTTPException(status_code=400, detail="replacement contains invalid characters")
+    return str(scope), terms, replacement
+
+
+@router.post("/quick/preview")
+def quick_preview(req: QuickParams, _: str = Depends(auth.current_user)):
+    directory, terms, replacement = _resolve_quick(req)
+    # Only the latest quick preview is ever looked at; drop finished ones so
+    # they don't crowd real tasks off the Tasks history.
+    con = db.connect()
+    con.execute(
+        "DELETE FROM tasks WHERE type = 'rename_quick_preview' "
+        "AND status NOT IN ('queued', 'running')"
+    )
+    con.commit()
+    con.close()
+    task_id = runner.create_task(
+        "rename_quick_preview",
+        {"directory": directory, "recursive": req.recursive, "terms": terms, "mode": req.mode},
+    )
+    runner.enqueue(
+        task_id, lambda ctx: quick.preview(ctx, directory, req.recursive, terms, replacement)
+    )
+    return {"task_id": task_id}
+
+
+@router.post("/quick/apply")
+def quick_apply(req: QuickApplyRequest, _: str = Depends(auth.current_user)):
+    if not req.file_ids:
+        raise HTTPException(status_code=400, detail="no files selected")
+    directory, terms, replacement = _resolve_quick(req)
+    ids = list(req.file_ids)
+    task_id = runner.create_task("rename", {"count": len(ids), "quick": True})
+    runner.enqueue(
+        task_id, lambda ctx: quick.apply(ids, directory, req.recursive, terms, replacement, ctx)
+    )
     return {"task_id": task_id}
