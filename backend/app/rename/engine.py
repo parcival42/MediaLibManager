@@ -21,7 +21,7 @@ import time
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
-from .. import db
+from .. import db, stash
 from ..tasks import runner
 from . import rules
 
@@ -371,6 +371,7 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
     # pre-apply cached preview either way.
     invalidate_recent_previews()
 
+    changed_paths: list[str] = []
     con = db.connect()
     try:
         assignments = _load_assignments(con)
@@ -408,6 +409,7 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
             if outcome == "renamed":
                 renamed += 1
                 renamed_ids.append(fid)
+                changed_paths.append(f["path"])
             elif outcome == "error":
                 errors += 1
             else:
@@ -417,6 +419,8 @@ def apply_renames(file_ids: list[int], ctx) -> dict:
         return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
     finally:
         con.close()
+        # Also after a cancellation: files renamed before it still changed.
+        stash.notify_changed(changed_paths, ctx.log)
 
 
 def rename_one(con, fid: int, path: str, target: str, ctx) -> str:

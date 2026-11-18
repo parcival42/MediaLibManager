@@ -7,13 +7,14 @@ import RenameRulesEditor from '../components/RenameRulesEditor'
 import MaintenancePanel from '../components/MaintenancePanel'
 
 type Settings = Record<string, string | number | boolean | number[]>
-type SectionKey = 'library' | 'duplicates' | 'rename' | 'metadata' | 'maintenance'
+type SectionKey = 'library' | 'duplicates' | 'rename' | 'metadata' | 'stash' | 'maintenance'
 
 const SECTIONS: { key: SectionKey; labelKey: string }[] = [
   { key: 'library', labelKey: 'nav_library' },
   { key: 'duplicates', labelKey: 'nav_duplicates' },
   { key: 'rename', labelKey: 'nav_rename' },
   { key: 'metadata', labelKey: 'nav_metadata' },
+  { key: 'stash', labelKey: 'settings_stash_title' },
   { key: 'maintenance', labelKey: 'settings_maintenance_title' },
 ]
 
@@ -200,6 +201,80 @@ function AutoStripFields({ form, setForm }: { form: Settings; setForm: (f: Setti
   )
 }
 
+function StashFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
+  const { t } = useI18n()
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const runTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await api<{ ok: boolean; version?: string; error?: string }>('/api/settings/stash/test', {
+        method: 'POST',
+        body: JSON.stringify({ url: String(form.stash_url ?? ''), api_key: String(form.stash_api_key ?? '') }),
+      })
+      setTestResult(
+        r.ok
+          ? { ok: true, text: `${t('settings_stash_test_ok')} ${r.version ?? ''}`.trim() }
+          : { ok: false, text: r.error ?? t('settings_stash_test_failed') },
+      )
+    } catch (e) {
+      setTestResult({ ok: false, text: (e as Error).message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const text = (key: string, labelKey: string, props: Record<string, string> = {}) => (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-ink-2">{t(labelKey)}</span>
+      <Input
+        {...props}
+        value={String(form[key] ?? '')}
+        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+      />
+    </label>
+  )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <label className="flex items-center gap-2 text-sm text-ink-1">
+        <input
+          type="checkbox"
+          checked={Boolean(form.stash_enabled)}
+          onChange={(e) => setForm({ ...form, stash_enabled: e.target.checked })}
+        />
+        {t('settings_stash_enabled')}
+      </label>
+      <p className="text-xs text-ink-3">{t('settings_stash_hint')}</p>
+      {text('stash_url', 'settings_stash_url', { placeholder: 'http://<stash-host>:9999' })}
+      {text('stash_api_key', 'settings_stash_api_key', { type: 'password', autoComplete: 'off' })}
+      {text('stash_media_path', 'settings_stash_media_path', { placeholder: '/data' })}
+      <p className="-mt-2 text-xs text-ink-3">{t('settings_stash_media_path_hint')}</p>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-ink-2">{t('settings_stash_delay')}</span>
+        <Input
+          type="number"
+          min={0}
+          className="w-32"
+          value={(form.stash_scan_delay_minutes as number) ?? 5}
+          onChange={(e) => setForm({ ...form, stash_scan_delay_minutes: e.target.value })}
+        />
+      </label>
+      <p className="-mt-2 text-xs text-ink-3">{t('settings_stash_delay_hint')}</p>
+      <div className="flex items-center gap-3">
+        <Button type="button" size="sm" variant="subtle" onClick={runTest} disabled={testing || !form.stash_url}>
+          {t('settings_stash_test')}
+        </Button>
+        {testResult && (
+          <span className={`text-sm ${testResult.ok ? 'text-ok' : 'text-danger'}`}>{testResult.text}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const DUPLICATE_FIELDS: { key: string; labelKey: string }[] = [
   { key: 'phash_threshold', labelKey: 'settings_field_phash_threshold' },
   { key: 'color_threshold', labelKey: 'settings_field_color_threshold' },
@@ -284,6 +359,11 @@ export default function SettingsPage() {
     payload.dir_watch_interval_minutes = Number(form.dir_watch_interval_minutes ?? 5)
     payload.scan_schedule_cleanup_enabled = Boolean(form.scan_schedule_cleanup_enabled)
     payload.metadata_auto_strip_enabled = Boolean(form.metadata_auto_strip_enabled)
+    payload.stash_enabled = Boolean(form.stash_enabled)
+    payload.stash_url = String(form.stash_url ?? '').trim()
+    payload.stash_api_key = String(form.stash_api_key ?? '').trim()
+    payload.stash_media_path = String(form.stash_media_path ?? '').trim()
+    payload.stash_scan_delay_minutes = Number(form.stash_scan_delay_minutes ?? 5)
     const updated = await api<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) })
     setForm(updated)
     setSaved(true)
@@ -344,6 +424,11 @@ export default function SettingsPage() {
           {section === 'metadata' && (
             <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved}>
               <AutoStripFields form={form} setForm={setForm} />
+            </FieldSection>
+          )}
+          {section === 'stash' && (
+            <FieldSection fields={[]} form={form} setForm={setForm} onSave={save} busy={busy} saved={saved}>
+              <StashFields form={form} setForm={setForm} />
             </FieldSection>
           )}
           {section === 'maintenance' && <MaintenancePanel />}

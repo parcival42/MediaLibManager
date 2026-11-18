@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-from .. import auth, db, paths
+from .. import auth, db, paths, stash
 from ..rename import engine as rename_engine
 
 router = APIRouter(prefix="/api")
@@ -162,6 +162,7 @@ def rename_file(file_id: int, body: RenameIn, _: str = Depends(auth.current_user
     # This page's own rename preview refreshes itself after this call, but a
     # cached preview for another scope wouldn't otherwise notice this rename.
     rename_engine.invalidate_recent_previews()
+    stash.notify_changed([str(new_path)])
     return {"path": str(new_path), "filename": new_path.name}
 
 

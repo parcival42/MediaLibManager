@@ -20,7 +20,7 @@ import os
 import re
 from collections import defaultdict
 
-from .. import db
+from .. import db, stash
 from . import engine, rules
 
 
@@ -150,6 +150,7 @@ def apply(file_ids: list[int], directory: str, recursive: bool, terms: list[str]
     # Rule previews cached per scope would otherwise keep showing old names.
     engine.invalidate_recent_previews()
 
+    changed_paths: list[str] = []
     con = db.connect()
     try:
         placeholders = ",".join("?" * len(file_ids))
@@ -174,6 +175,7 @@ def apply(file_ids: list[int], directory: str, recursive: bool, terms: list[str]
                 if outcome == "renamed":
                     renamed += 1
                     renamed_ids.append(f["id"])
+                    changed_paths.append(f["path"])
                 elif outcome == "error":
                     errors += 1
                 else:
@@ -183,3 +185,5 @@ def apply(file_ids: list[int], directory: str, recursive: bool, terms: list[str]
         return {"renamed": renamed, "skipped": skipped, "errors": errors, "renamed_ids": renamed_ids}
     finally:
         con.close()
+        # Also after a cancellation: files renamed before it still changed.
+        stash.notify_changed(changed_paths, ctx.log)

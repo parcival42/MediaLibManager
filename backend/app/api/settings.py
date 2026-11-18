@@ -1,7 +1,8 @@
 """Settings endpoints — read and update the DB-backed configuration."""
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
-from .. import auth, config
+from .. import auth, config, stash
 
 router = APIRouter(prefix="/api")
 
@@ -48,3 +49,18 @@ def update_settings(values: dict, _: str = Depends(auth.current_user)):
         raise HTTPException(status_code=400, detail=f"invalid value for: {', '.join(invalid)}")
     config.set_many(allowed)
     return config.get_all()
+
+
+class StashTestIn(BaseModel):
+    url: str
+    api_key: str = ""
+
+
+@router.post("/settings/stash/test")
+def test_stash(req: StashTestIn, _: str = Depends(auth.current_user)):
+    """Check the given (possibly unsaved) Stash URL/API key."""
+    try:
+        version = stash.test_connection(req.url.strip(), req.api_key.strip())
+    except stash.StashError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "version": version}

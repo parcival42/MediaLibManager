@@ -21,7 +21,7 @@ import time
 
 import imagehash
 
-from .. import db, paths
+from .. import db, paths, stash
 from ..dedup.bktree import hamming, parse_hash
 from ..enrich import tools
 
@@ -169,6 +169,7 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
     if not file_ids:
         return {"stripped": 0, "failed": 0, "errors": 0}
 
+    changed_paths: list[str] = []
     con = db.connect()
     try:
         placeholders = ",".join("?" * len(file_ids))
@@ -229,6 +230,7 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
                 )
                 con.commit()
                 stripped += 1
+                changed_paths.append(path)
                 ctx.log(f"OK {os.path.basename(path)}")
             else:
                 try:
@@ -249,6 +251,8 @@ def apply_strip(file_ids: list[int], ctx) -> dict:
         return {"stripped": stripped, "failed": failed, "errors": errors}
     finally:
         con.close()
+        # Stripping changes file content, so Stash's fingerprints are stale.
+        stash.notify_changed(changed_paths, ctx.log)
 
 
 def history(limit: int = 200) -> list[dict]:
