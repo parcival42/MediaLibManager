@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -29,6 +30,8 @@ TIMEOUT = 10  # seconds per request
 # Above this many distinct directories a single scan of the whole library is
 # cheaper for both sides than a huge path list.
 MAX_SCAN_PATHS = 100
+# Cap on the directory list returned by ``status()``.
+STATUS_MAX_DIRS = 500
 
 
 class StashError(Exception):
@@ -116,23 +119,62 @@ def scan_directories(directories: set[str]) -> str:
 _pending: set[str] = set()
 _timer: threading.Timer | None = None
 _pending_lock = threading.Lock()
+# Bookkeeping for ``status()``, all guarded by ``_pending_lock``.
+_queued_at: float | None = None  # first change of the current batch
+_due_at: float | None = None     # when the timer fires
+_last: dict | None = None        # outcome of the most recent flush
 
 
 def _flush() -> None:
-    global _timer
+    global _timer, _queued_at, _due_at, _last
     with _pending_lock:
         directories = set(_pending)
         _pending.clear()
+        if _timer is not None:
+            _timer.cancel()  # no-op when running inside the timer itself
         _timer = None
-    if not directories or not config.get("stash_enabled") or not config.get("stash_url"):
+        _queued_at = None
+        _due_at = None
+    if not directories:
         return
-    try:
-        job_id = scan_directories(directories)
-        log.info("Stash scan started for %d directories (job %s)", len(directories), job_id)
-    except StashError as exc:
-        log.warning("Stash scan could not be started: %s", exc)
-    except Exception:  # noqa: BLE001 - background thread, nothing to propagate to
-        log.exception("unexpected error triggering Stash scan")
+    result: dict = {"at": time.time(), "directories": len(directories),
+                    "ok": False, "job_id": None, "error": None}
+    if not config.get("stash_enabled") or not config.get("stash_url"):
+        result["error"] = "Stash integration disabled or no URL configured"
+    else:
+        try:
+            result["job_id"] = scan_directories(directories)
+            result["ok"] = True
+            log.info("Stash scan started for %d directories (job %s)",
+                     len(directories), result["job_id"])
+        except StashError as exc:
+            result["error"] = str(exc)
+            log.warning("Stash scan could not be started: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - background thread, nothing to propagate to
+            result["error"] = f"unexpected error: {exc}"
+            log.exception("unexpected error triggering Stash scan")
+    with _pending_lock:
+        _last = result
+
+
+def flush_now() -> None:
+    """Send the buffered scan request immediately instead of waiting for the timer."""
+    _flush()
+
+
+def status() -> dict:
+    """Snapshot of the buffer for the UI: pending directories, due time, last result."""
+    with _pending_lock:
+        pending = sorted(_pending)
+        return {
+            "enabled": bool(config.get("stash_enabled") and config.get("stash_url")),
+            "pending": bool(pending),
+            "pending_count": len(pending),
+            "directories": pending[:STATUS_MAX_DIRS],
+            "queued_at": _queued_at,
+            "due_at": _due_at,
+            "last": dict(_last) if _last else None,
+        }
 
 
 def notify_changed(file_paths, log_fn=None) -> None:
@@ -142,7 +184,7 @@ def notify_changed(file_paths, log_fn=None) -> None:
     (see above). No-op when the integration is disabled or nothing changed.
     ``log_fn`` (e.g. a task's ``ctx.log``) gets a note that a scan is queued.
     """
-    global _timer
+    global _timer, _queued_at, _due_at
     if not config.get("stash_enabled") or not config.get("stash_url"):
         return
     directories = {os.path.dirname(p) for p in file_paths if p}
@@ -152,6 +194,8 @@ def notify_changed(file_paths, log_fn=None) -> None:
     with _pending_lock:
         _pending.update(directories)
         if _timer is None:
+            _queued_at = time.time()
+            _due_at = _queued_at + delay
             _timer = threading.Timer(delay, _flush)
             _timer.daemon = True
             _timer.name = "stash-scan-timer"

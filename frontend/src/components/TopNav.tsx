@@ -10,7 +10,8 @@ import { useQuery } from '@tanstack/react-query'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { IconChevron, IconGear, IconLogout } from './icons'
+import { IconChevron, IconGear, IconLogout, IconSyncPending } from './icons'
+import type { StashStatusData } from '../pages/StashStatus'
 
 const ACTIVE_TASK = new Set(['queued', 'running'])
 
@@ -49,6 +50,19 @@ export default function TopNav({
     refetchInterval: (query) => (query.state.data?.active ? 5000 : 15000),
   })
   const enrichActive = (enrichStatus?.active && !enrichStatus?.paused) ?? false
+
+  // Buffered Stash scan request: the chip only exists while one is pending.
+  // Shares the ['stash', 'status'] cache with the Stash status page.
+  const { data: stashStatus } = useQuery<StashStatusData>({
+    queryKey: ['stash', 'status'],
+    queryFn: () => api<StashStatusData>('/api/stash/status'),
+    refetchInterval: (query) => (query.state.data?.pending ? 5000 : 15000),
+  })
+  const stashTitle =
+    stashStatus?.pending && stashStatus.due_at
+      ? `${t('stash_pending_tooltip')} ${new Date(stashStatus.due_at * 1000).toLocaleTimeString()} ` +
+        `(${stashStatus.pending_count} ${t('stash_directories')})`
+      : ''
 
   const logout = async () => {
     await api('/api/logout', { method: 'POST' })
@@ -114,6 +128,25 @@ export default function TopNav({
           />
           {t('nav_tasks')}
         </NavLink>
+
+        {/* Pending Stash scan request */}
+        {stashStatus?.pending && (
+          <NavLink
+            to="/stash"
+            aria-label={stashTitle}
+            title={stashTitle}
+            className={({ isActive }) =>
+              [
+                'grid h-9 w-9 place-items-center rounded-xl border transition',
+                isActive
+                  ? 'border-accent/50 bg-surface-3 text-warn'
+                  : 'border-line bg-surface-2 text-warn hover:bg-surface-3',
+              ].join(' ')
+            }
+          >
+            <IconSyncPending />
+          </NavLink>
+        )}
 
         {/* System settings */}
         <NavLink

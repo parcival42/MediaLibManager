@@ -23,6 +23,7 @@ from .api import metadata as metadata_api
 from .api import rename as rename_api
 from .api import scan as scan_api
 from .api import settings as settings_api
+from .api import stash as stash_api
 from .api import stats as stats_api
 from .api import tasks as tasks_api
 from .enrich import worker as enrich_worker
@@ -76,6 +77,7 @@ app.include_router(rename_api.router)
 app.include_router(metadata_api.router)
 app.include_router(maintenance_api.router)
 app.include_router(stats_api.router)
+app.include_router(stash_api.router)
 
 
 @app.get("/api/health")

@@ -170,3 +170,12 @@ export const TYPE_ICON_COMP: Record<string, (p: SVGProps<SVGSVGElement>) => JSX.
   audio: IconAudio,
   other: IconFile,
 }
+
+/** Circular arrows with a clock hand: a rescan waiting to be sent. */
+export const IconSyncPending = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base({ width: 16, height: 16, ...p })}>
+    <path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2" />
+    <path d="M18.5 2.5v3.3h-3.3M5.5 21.5v-3.3h3.3" />
+    <path d="M12 8v4l2.5 1.5" />
+  </svg>
+)

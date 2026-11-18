@@ -13,6 +13,7 @@ import Metadata from './pages/Metadata'
 import Tasks from './pages/Tasks'
 import Statistics from './pages/Statistics'
 import Settings from './pages/Settings'
+import StashStatus from './pages/StashStatus'
 
 interface AuthState {
   authenticated: boolean
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/statistics" element={<Statistics />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/stash" element={<StashStatus />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
