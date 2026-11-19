@@ -491,3 +491,33 @@ export function Modal({
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Tooltip
+// ---------------------------------------------------------------------------
+
+/** Hover/focus tooltip below its trigger, replacing the native `title`
+ * attribute (slow, unstyled). Pure CSS: shown on hover or keyboard focus of
+ * the wrapped element. `align` picks the edge the bubble lines up with. */
+export function Tooltip({
+  content,
+  align = 'center',
+  children,
+}: {
+  content: ReactNode
+  align?: 'center' | 'right'
+  children: ReactNode
+}) {
+  const position = align === 'right' ? 'right-0' : 'left-1/2 -translate-x-1/2'
+  return (
+    <span className="group/tooltip relative inline-flex">
+      {children}
+      <span
+        role="tooltip"
+        className={`pointer-events-none absolute top-full z-40 mt-2 w-max max-w-xs ${position} rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs leading-relaxed text-ink-2 opacity-0 shadow-card transition-opacity duration-150 group-hover/tooltip:opacity-100 group-hover/tooltip:delay-150 group-focus-within/tooltip:opacity-100`}
+      >
+        {content}
+      </span>
+    </span>
+  )
+}

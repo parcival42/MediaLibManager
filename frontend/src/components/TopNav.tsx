@@ -11,6 +11,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
 import { IconChevron, IconGear, IconLogout, IconSyncPending } from './icons'
+import { Tooltip } from './ui'
 import type { StashStatusData } from '../pages/StashStatus'
 
 const ACTIVE_TASK = new Set(['queued', 'running'])
@@ -58,11 +59,12 @@ export default function TopNav({
     queryFn: () => api<StashStatusData>('/api/stash/status'),
     refetchInterval: (query) => (query.state.data?.pending ? 5000 : 15000),
   })
-  const stashTitle =
-    stashStatus?.pending && stashStatus.due_at
-      ? `${t('stash_pending_tooltip')} ${new Date(stashStatus.due_at * 1000).toLocaleTimeString()} ` +
-        `(${stashStatus.pending_count} ${t('stash_directories')})`
-      : ''
+  const stashDueAt = stashStatus?.due_at
+    ? new Date(stashStatus.due_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+  const stashLabel = stashDueAt
+    ? `${t('stash_pending_tooltip')}, ${t('stash_pending_sent_at')} ${stashDueAt}`
+    : t('stash_pending_tooltip')
 
   const logout = async () => {
     await api('/api/logout', { method: 'POST' })
@@ -131,21 +133,37 @@ export default function TopNav({
 
         {/* Pending Stash scan request */}
         {stashStatus?.pending && (
-          <NavLink
-            to="/stash"
-            aria-label={stashTitle}
-            title={stashTitle}
-            className={({ isActive }) =>
-              [
-                'grid h-9 w-9 place-items-center rounded-xl border transition',
-                isActive
-                  ? 'border-accent/50 bg-surface-3 text-warn'
-                  : 'border-line bg-surface-2 text-warn hover:bg-surface-3',
-              ].join(' ')
+          <Tooltip
+            content={
+              <>
+                <div className="font-semibold text-ink-1">{t('stash_pending_tooltip')}</div>
+                {stashDueAt && (
+                  <div>
+                    {t('stash_pending_sent_at')}{' '}
+                    <span className="font-semibold tabular-nums text-warn">{stashDueAt}</span>
+                  </div>
+                )}
+                <div className="text-ink-3">
+                  {stashStatus.pending_count} {t('stash_directories')}
+                </div>
+              </>
             }
           >
-            <IconSyncPending />
-          </NavLink>
+            <NavLink
+              to="/stash"
+              aria-label={stashLabel}
+              className={({ isActive }) =>
+                [
+                  'grid h-9 w-9 place-items-center rounded-xl border transition',
+                  isActive
+                    ? 'border-accent/50 bg-surface-3 text-warn'
+                    : 'border-line bg-surface-2 text-warn hover:bg-surface-3',
+                ].join(' ')
+              }
+            >
+              <IconSyncPending />
+            </NavLink>
+          </Tooltip>
         )}
 
         {/* System settings */}

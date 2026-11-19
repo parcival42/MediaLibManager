@@ -35,7 +35,7 @@ DEFAULTS = {
     "stash_url":        "",   # e.g. http://<stash-host>:9999
     "stash_api_key":    "",
     "stash_media_path": "",   # media_root as seen by Stash; empty = same path
-    "stash_scan_delay_minutes": 5,  # buffer: changes are collected and sent as one scan this long after the first
+    "stash_scan_delay_minutes": 5,  # buffer: changes are collected and sent as one scan this long after the first (rounded up to the full minute)
     # --- Task history ---
     "task_history_retention_days": 30,  # finished task rows older than this get pruned
     # --- Enrichment ---

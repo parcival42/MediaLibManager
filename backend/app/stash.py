@@ -16,6 +16,7 @@ successful rename/strip into an error. They are only logged.
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -109,10 +110,11 @@ def scan_directories(directories: set[str]) -> str:
 # --- Buffered scan requests -------------------------------------------------
 #
 # Changed directories are collected and sent as one scan request
-# ``stash_scan_delay_minutes`` after the *first* change of a batch, so a series
-# of renames doesn't fire a Stash scan every minute or two. The timer is not
-# restarted by later changes -- with a sliding window, continuous editing
-# would postpone the scan indefinitely. Pending directories live only in
+# ``stash_scan_delay_minutes`` after the *first* change of a batch, rounded up
+# to the next full minute, so a series of renames doesn't fire a Stash scan
+# every minute or two.
+# The timer is not restarted by later changes -- with a sliding window,
+# continuous editing would postpone the scan indefinitely. Pending directories live only in
 # memory; a restart before the timer fires drops them (Stash's own scheduled
 # scan still catches up).
 
@@ -123,6 +125,13 @@ _pending_lock = threading.Lock()
 _queued_at: float | None = None  # first change of the current batch
 _due_at: float | None = None     # when the timer fires
 _last: dict | None = None        # outcome of the most recent flush
+
+
+def _due_time(now: float, delay: float) -> float:
+    """``now + delay``, rounded up to the next full minute (no delay: ``now``)."""
+    if delay <= 0:
+        return now
+    return math.ceil((now + delay) / 60) * 60
 
 
 def _flush() -> None:
@@ -195,15 +204,17 @@ def notify_changed(file_paths, log_fn=None) -> None:
         _pending.update(directories)
         if _timer is None:
             _queued_at = time.time()
-            _due_at = _queued_at + delay
-            _timer = threading.Timer(delay, _flush)
+            _due_at = _due_time(_queued_at, delay)
+            _timer = threading.Timer(_due_at - _queued_at, _flush)
             _timer.daemon = True
             _timer.name = "stash-scan-timer"
             _timer.start()
+        due_at = _due_at
     if log_fn:
         try:
+            when = time.strftime("%H:%M", time.localtime(due_at)) if due_at else "now"
             log_fn(f"Stash scan queued for {len(directories)} "
                    f"director{'y' if len(directories) == 1 else 'ies'} "
-                   f"(sent in at most {round(delay / 60, 1):g} min)")
+                   f"(sent at {when})")
         except Exception:  # noqa: BLE001
             pass

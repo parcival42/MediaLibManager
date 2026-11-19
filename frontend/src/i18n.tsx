@@ -410,13 +410,14 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   },
   settings_stash_delay: { de: 'Scan-Verzögerung (Minuten)', en: 'Scan delay (minutes)' },
   settings_stash_delay_hint: {
-    de: 'Änderungen werden gesammelt und so lange nach der ersten Änderung als ein gemeinsamer Scan an Stash geschickt.',
-    en: 'Changes are collected and sent to Stash as one scan this long after the first change.',
+    de: 'Änderungen werden gesammelt und so lange nach der ersten Änderung (aufgerundet auf die volle Minute) als ein gemeinsamer Scan an Stash geschickt.',
+    en: 'Changes are collected and sent to Stash as one scan this long after the first change (rounded up to the full minute).',
   },
   settings_stash_test: { de: 'Verbindung testen', en: 'Test connection' },
   settings_stash_test_ok: { de: 'Verbunden, Version', en: 'Connected, version' },
   settings_stash_test_failed: { de: 'Verbindung fehlgeschlagen', en: 'Connection failed' },
-  stash_pending_tooltip: { de: 'Stash-Scan gepuffert, wird gesendet um', en: 'Stash scan buffered, sent at' },
+  stash_pending_tooltip: { de: 'Stash-Scan gepuffert', en: 'Stash scan buffered' },
+  stash_pending_sent_at: { de: 'Wird gesendet um', en: 'Sent at' },
   stash_directories: { de: 'Verzeichnisse', en: 'directories' },
   stash_page_title: { de: 'Stash-Scan', en: 'Stash scan' },
   stash_page_subtitle: {
