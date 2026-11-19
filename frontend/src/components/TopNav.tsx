@@ -107,30 +107,6 @@ export default function TopNav({
       </nav>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        {/* Running tasks */}
-        <NavLink
-          to="/tasks"
-          className={({ isActive }) =>
-            [
-              'flex h-9 items-center gap-2 rounded-xl border px-3 text-[13px] font-medium transition',
-              isActive
-                ? 'border-accent/50 bg-surface-3 text-ink-1'
-                : 'border-line bg-surface-2 text-ink-2 hover:bg-surface-3 hover:text-ink-1',
-            ].join(' ')
-          }
-        >
-          <span
-            className={`h-2 w-2 rounded-full ${
-              taskActive
-                ? 'animate-pulse bg-accent shadow-glow'
-                : enrichActive
-                  ? 'animate-pulse bg-warn'
-                  : 'bg-ink-3/40'
-            }`}
-          />
-          {t('nav_tasks')}
-        </NavLink>
-
         {/* Pending Stash scan request */}
         {stashStatus?.pending && (
           <Tooltip
@@ -165,6 +141,30 @@ export default function TopNav({
             </NavLink>
           </Tooltip>
         )}
+
+        {/* Running tasks */}
+        <NavLink
+          to="/tasks"
+          className={({ isActive }) =>
+            [
+              'flex h-9 items-center gap-2 rounded-xl border px-3 text-[13px] font-medium transition',
+              isActive
+                ? 'border-accent/50 bg-surface-3 text-ink-1'
+                : 'border-line bg-surface-2 text-ink-2 hover:bg-surface-3 hover:text-ink-1',
+            ].join(' ')
+          }
+        >
+          <span
+            className={`h-2 w-2 rounded-full ${
+              taskActive
+                ? 'animate-pulse bg-accent shadow-glow'
+                : enrichActive
+                  ? 'animate-pulse bg-warn'
+                  : 'bg-ink-3/40'
+            }`}
+          />
+          {t('nav_tasks')}
+        </NavLink>
 
         {/* System settings */}
         <NavLink
