@@ -2,11 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
-import { Button, Card, Checkbox, Field, Input, PageHeader, SectionTitle, Toggle } from '../components/ui'
+import { Badge, Button, Card, Checkbox, Field, Input, PageHeader, SectionTitle, Segmented, Textarea, Toggle } from '../components/ui'
 import RenameRulesEditor from '../components/RenameRulesEditor'
 import MaintenancePanel from '../components/MaintenancePanel'
+import { stashFlagLabel } from './StashStatus'
 
-type Settings = Record<string, string | number | boolean | number[]>
+type Settings = Record<string, string | number | boolean | number[] | string[] | Record<string, boolean>>
 type SectionKey = 'library' | 'duplicates' | 'rename' | 'metadata' | 'stash' | 'maintenance'
 
 const SECTIONS: { key: SectionKey; labelKey: string }[] = [
@@ -88,7 +89,7 @@ function localToUtc(timeLocal: string, daysLocal: number[]): { time: string; day
 function ScheduleFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
   const { t } = useI18n()
   const enabled = Boolean(form.scan_schedule_enabled)
-  const daysUtc = Array.isArray(form.scan_schedule_days) ? form.scan_schedule_days : []
+  const daysUtc = Array.isArray(form.scan_schedule_days) ? (form.scan_schedule_days as number[]) : []
   const timeUtc = String(form.scan_schedule_time ?? '03:00')
   const local = utcToLocal(timeUtc, daysUtc.length ? daysUtc : [0])
   const localDays = daysUtc.length ? local.days : []
@@ -154,6 +155,142 @@ function DirWatchFields({ form, setForm }: { form: Settings; setForm: (f: Settin
           onChange={(e) => setForm({ ...form, dir_watch_interval_minutes: e.target.value })}
         />
       </Field>
+    </div>
+  )
+}
+
+function ExcludeFields({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
+  const { t } = useI18n()
+  const patterns = Array.isArray(form.scan_exclude_patterns) ? (form.scan_exclude_patterns as string[]) : []
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-line pt-5">
+      <SectionTitle title={t('settings_scan_exclude_title')} size="sm" className="!mb-0" />
+      <Field label={t('settings_scan_exclude_patterns')} hint={t('settings_scan_exclude_hint')}>
+        <Textarea
+          rows={6}
+          spellCheck={false}
+          // Kept unfiltered while typing (blank lines included) so the cursor
+          // doesn't jump; blanks are dropped on save.
+          value={patterns.join('\n')}
+          onChange={(e) => setForm({ ...form, scan_exclude_patterns: e.target.value.split('\n') })}
+        />
+      </Field>
+    </div>
+  )
+}
+
+interface ScanOptionsInfo {
+  ok: boolean
+  error?: string
+  flags?: string[]
+  stash_defaults?: Record<string, boolean>
+}
+
+function StashScanOptions({ form, setForm }: { form: Settings; setForm: (f: Settings) => void }) {
+  const { t } = useI18n()
+  const [info, setInfo] = useState<ScanOptionsInfo | null>(null)
+  const [loading, setLoading] = useState(false)
+  const mode = form.stash_scan_options_mode === 'custom' ? 'custom' : 'stash'
+  const custom = (form.stash_scan_options && typeof form.stash_scan_options === 'object' && !Array.isArray(form.stash_scan_options)
+    ? form.stash_scan_options
+    : {}) as Record<string, boolean>
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      setInfo(
+        await api<ScanOptionsInfo>('/api/settings/stash/scan-options', {
+          method: 'POST',
+          body: JSON.stringify({ url: String(form.stash_url ?? ''), api_key: String(form.stash_api_key ?? '') }),
+        }),
+      )
+    } catch (e) {
+      setInfo({ ok: false, error: (e as Error).message })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Load once when the section opens with a URL already configured.
+  useEffect(() => {
+    if (form.stash_url) void load()
+  }, [])
+
+  const defaults = info?.ok ? info.stash_defaults ?? {} : {}
+  const flags = info?.ok ? info.flags ?? [] : []
+
+  const setMode = (m: 'stash' | 'custom') => {
+    // Switching to custom with nothing chosen yet starts from Stash's defaults.
+    const next: Settings = { ...form, stash_scan_options_mode: m }
+    if (m === 'custom' && Object.keys(custom).length === 0 && flags.length) {
+      next.stash_scan_options = { ...defaults }
+    }
+    setForm(next)
+  }
+
+  const setFlag = (flag: string, value: boolean) =>
+    setForm({ ...form, stash_scan_options: { ...custom, [flag]: value } })
+
+  return (
+    <div className="flex flex-col gap-4 border-t border-line pt-5">
+      <SectionTitle title={t('settings_stash_options_title')} size="sm" className="!mb-0" />
+      <p className="text-xs text-ink-3">{t('settings_stash_options_hint')}</p>
+      <Segmented
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'stash', label: t('settings_stash_options_mode_stash') },
+          { value: 'custom', label: t('settings_stash_options_mode_custom') },
+        ]}
+      />
+      <p className="text-xs text-ink-3">
+        {t(mode === 'custom' ? 'settings_stash_options_custom_hint' : 'settings_stash_options_stash_hint')}
+      </p>
+
+      {info && !info.ok && <p className="text-sm text-danger">{info.error}</p>}
+      {!info && <p className="text-xs text-ink-3">{t('settings_stash_options_unloaded')}</p>}
+
+      {flags.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {flags.map((flag) => {
+            const def = Boolean(defaults[flag])
+            const overridden = mode === 'custom' && flag in custom
+            const value = overridden ? Boolean(custom[flag]) : def
+            return (
+              <div key={flag} className="flex items-center gap-2">
+                <Checkbox
+                  checked={value}
+                  disabled={mode !== 'custom'}
+                  onChange={(v) => setFlag(flag, v)}
+                  label={stashFlagLabel(t, flag)}
+                />
+                {mode === 'custom' && (
+                  <Badge>
+                    {t('settings_stash_options_default')}: {t(def ? 'settings_stash_options_on' : 'settings_stash_options_off')}
+                  </Badge>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" size="sm" variant="subtle" onClick={load} disabled={loading || !form.stash_url}>
+          {t('settings_stash_options_load')}
+        </Button>
+        {mode === 'custom' && flags.length > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="subtle"
+            onClick={() => setForm({ ...form, stash_scan_options: { ...defaults } })}
+          >
+            {t('settings_stash_options_reset')}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
@@ -239,6 +376,7 @@ function StashFields({ form, setForm }: { form: Settings; setForm: (f: Settings)
           <span className={`text-sm ${testResult.ok ? 'text-ok' : 'text-danger'}`}>{testResult.text}</span>
         )}
       </div>
+      <StashScanOptions form={form} setForm={setForm} />
     </div>
   )
 }
@@ -347,6 +485,14 @@ export default function SettingsPage() {
     payload.stash_api_key = String(form.stash_api_key ?? '').trim()
     payload.stash_media_path = String(form.stash_media_path ?? '').trim()
     payload.stash_scan_delay_minutes = num('stash_scan_delay_minutes', 'settings_stash_delay')
+    payload.stash_scan_options_mode = form.stash_scan_options_mode === 'custom' ? 'custom' : 'stash'
+    payload.stash_scan_options =
+      form.stash_scan_options && typeof form.stash_scan_options === 'object' && !Array.isArray(form.stash_scan_options)
+        ? (form.stash_scan_options as Record<string, boolean>)
+        : {}
+    payload.scan_exclude_patterns = (Array.isArray(form.scan_exclude_patterns) ? (form.scan_exclude_patterns as string[]) : [])
+      .map((p) => p.trim())
+      .filter(Boolean)
     if (invalid.length) {
       setSaveError(`${t('settings_invalid_fields')}: ${invalid.join(', ')}`)
       return
@@ -405,6 +551,7 @@ export default function SettingsPage() {
             >
               <ScheduleFields form={form} setForm={setForm} />
               <DirWatchFields form={form} setForm={setForm} />
+              <ExcludeFields form={form} setForm={setForm} />
             </FieldSection>
           )}
           {section === 'duplicates' && (

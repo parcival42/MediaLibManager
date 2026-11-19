@@ -1,8 +1,8 @@
 /**
  * Stash status page — the buffered Stash scan request (see backend/app/stash.py).
  * Shows which directories are waiting, when the request goes out, and the
- * outcome of the last request. The buffer lives only in backend memory, so a
- * restart empties it.
+ * outcome of the last request. The buffer is persisted by the backend, so it
+ * survives restarts, and a failed request is retried.
  */
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -24,7 +24,17 @@ export interface StashStatusData {
     ok: boolean
     job_id: string | null
     error: string | null
+    options?: Record<string, boolean> | null
+    retry_at?: number | null
   } | null
+}
+
+/** Readable label for a Stash scan flag (e.g. scanGenerateCovers); unknown
+ * flags of newer Stash versions fall back to their raw name. */
+export function stashFlagLabel(t: (key: string) => string, flag: string): string {
+  const key = `stash_flag_${flag}`
+  const label = t(key)
+  return label === key ? flag : label
 }
 
 function fmtTime(ts?: number | null): string {
@@ -135,6 +145,16 @@ export default function StashStatus() {
                 <div>{t('stash_directories_count')}: {last.directories}</div>
                 {last.job_id && <div>{t('stash_job_id')}: {last.job_id}</div>}
                 {last.error && <div className="text-danger">{last.error}</div>}
+                {!last.ok && last.retry_at && <div>{t('stash_retry_at')}: {fmtTime(last.retry_at)}</div>}
+                {last.options && (
+                  <div>
+                    {t('stash_options_sent')}:{' '}
+                    {Object.entries(last.options)
+                      .filter(([, on]) => on)
+                      .map(([flag]) => stashFlagLabel(t, flag))
+                      .join(', ') || t('stash_options_none')}
+                  </div>
+                )}
               </div>
             </Card>
           ) : (

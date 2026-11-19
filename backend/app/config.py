@@ -36,6 +36,19 @@ DEFAULTS = {
     "stash_api_key":    "",
     "stash_media_path": "",   # media_root as seen by Stash; empty = same path
     "stash_scan_delay_minutes": 5,  # buffer: changes are collected and sent as one scan this long after the first (rounded up to the full minute)
+    # Generate flags sent with the scan (scanGenerateCovers, ...). "stash" uses
+    # the scan defaults configured in Stash itself (what its own scan dialog
+    # sends); "custom" overrides them with ``stash_scan_options``. Flags missing
+    # from the custom set fall back to Stash's defaults.
+    "stash_scan_options_mode": "stash",
+    "stash_scan_options":      {},     # {flag_name: bool}, only used in "custom" mode
+    # --- Inventory scan ---
+    # fnmatch patterns (case-sensitive) matched against each single file or
+    # directory *name*, not the full path. A matching directory is skipped with
+    # everything beneath it.
+    "scan_exclude_patterns": [
+        ".*", "@eaDir", "#recycle", "#snapshot", "*_original", "Thumbs.db", "desktop.ini",
+    ],
     # --- Task history ---
     "task_history_retention_days": 30,  # finished task rows older than this get pruned
     # --- Enrichment ---

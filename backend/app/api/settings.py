@@ -12,6 +12,35 @@ def get_settings(_: str = Depends(auth.current_user)):
     return config.get_all()
 
 
+def _options_mode(value) -> str:
+    if value not in ("stash", "custom"):
+        raise ValueError(value)
+    return value
+
+
+def _scan_options(value) -> dict:
+    if not isinstance(value, dict):
+        raise TypeError(value)
+    if any(not isinstance(v, bool) for v in value.values()):
+        raise TypeError(value)
+    return {str(k): v for k, v in value.items()}
+
+
+def _exclude_patterns(value) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise TypeError(value)
+    # Drop blanks and duplicates, keep the given order.
+    return list(dict.fromkeys(v.strip() for v in value if v.strip()))
+
+
+# Keys whose value needs more than the type-of-default coercion below.
+_VALIDATORS = {
+    "stash_scan_options_mode": _options_mode,
+    "stash_scan_options":      _scan_options,
+    "scan_exclude_patterns":   _exclude_patterns,
+}
+
+
 def _coerce(key: str, value):
     """Coerce ``value`` to the type implied by ``config.DEFAULTS[key]``.
 
@@ -21,6 +50,8 @@ def _coerce(key: str, value):
     without its own checks (a bad value here used to reach as far as flipping
     an unrelated, already-successful task's status to 'error').
     """
+    if key in _VALIDATORS:
+        return _VALIDATORS[key](value)
     default = config.DEFAULTS[key]
     if isinstance(default, bool):
         return bool(value)
@@ -64,3 +95,14 @@ def test_stash(req: StashTestIn, _: str = Depends(auth.current_user)):
     except stash.StashError as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "version": version}
+
+
+@router.post("/settings/stash/scan-options")
+def stash_scan_options(req: StashTestIn, _: str = Depends(auth.current_user)):
+    """Scan flags the given Stash instance accepts, plus its configured
+    defaults -- for the custom-options editor (works with unsaved values)."""
+    try:
+        info = stash.scan_options_info(req.url.strip(), req.api_key.strip())
+    except stash.StashError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, **info}

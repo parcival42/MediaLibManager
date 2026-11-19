@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db, scheduler
+from . import db, scheduler, stash
 from .api import auth as auth_api
 from .api import browse as browse_api
 from .api import dedup as dedup_api
@@ -58,7 +58,9 @@ async def lifespan(app: FastAPI):
     task_runner.start_worker()
     enrich_worker.start()
     scheduler.start()
+    stash.start()
     yield
+    stash.stop()
     scheduler.stop()
     enrich_worker.stop()
 

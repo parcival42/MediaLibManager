@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from .. import db
+from . import exclude
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".wmv", ".flv"}
@@ -129,9 +130,25 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
             unreadable_dirs.append(str(err.filename).rstrip("/"))
             log(f"WARNING: cannot read {err.filename}: {err.strerror}")
 
-    for dirpath, _dirnames, filenames in os.walk(scope, onerror=on_walk_error):
+    # Exclusion patterns (scan/exclude.py). A scope that itself lies inside an
+    # excluded directory contributes nothing, so its known rows go missing
+    # like those of any other excluded path.
+    pats = exclude.patterns()
+    if exclude.path_excluded(scope_str, pats):
+        log(f"{scope_str} matches an exclusion pattern; nothing to scan.")
+        walk = iter(())
+    else:
+        walk = os.walk(scope, onerror=on_walk_error)
+    n_excluded = 0
+    for dirpath, dirnames, filenames in walk:
         check_cancelled()
+        kept = [d for d in dirnames if not exclude.is_excluded(d, pats)]
+        n_excluded += len(dirnames) - len(kept)
+        dirnames[:] = kept  # prune: os.walk does not descend into excluded dirs
         for fn in filenames:
+            if exclude.is_excluded(fn, pats):
+                n_excluded += 1
+                continue
             p = os.path.join(dirpath, fn)
             try:
                 current[p] = os.stat(p)
@@ -143,6 +160,8 @@ def _scan_one_scope(scope: Path, log, check_cancelled, mark_walk_done) -> dict:
             log(f"Discovered {len(current)} files…")
     mark_walk_done()
     log(f"Found {len(current)} files on disk.")
+    if n_excluded:
+        log(f"Skipped {n_excluded} excluded files/directories.")
 
     def unreadable(p: str) -> bool:
         return p in unreadable_files or any(

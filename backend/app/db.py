@@ -152,6 +152,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    REAL
 );
 
+-- Directories waiting for the buffered Stash scan request (see stash.py).
+-- Persisted so a restart or a failed request does not lose them; a row is
+-- removed only once Stash has accepted a scan covering it.
+CREATE TABLE IF NOT EXISTS stash_pending (
+    directory       TEXT PRIMARY KEY,
+    first_queued_at REAL NOT NULL,   -- first change since the last successful send
+    last_changed_at REAL NOT NULL    -- latest change; guards against dropping a change made mid-send
+);
+
 -- Deletion history
 CREATE TABLE IF NOT EXISTS delete_history (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

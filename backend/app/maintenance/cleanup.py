@@ -12,7 +12,8 @@ serial task (cooperatively cancellable) since it walks the whole library.
 import os
 import stat
 
-from .. import db
+from .. import db, paths
+from ..scan import exclude
 
 
 def stats() -> dict:
@@ -54,22 +55,33 @@ def run_cleanup(ctx) -> dict:
     try:
         rows = con.execute("SELECT id, path FROM files").fetchall()
         total = len(rows)
-        stale: list[int] = []
+        gone: list[int] = []
+        # Rows for paths matching a scan exclusion pattern (added after the
+        # file was inventoried): the file may still exist, but no scan will
+        # ever confirm it again. Not counted by the mount guard below -- a
+        # broad new pattern is a deliberate choice, not a missing mount.
+        excluded: list[int] = []
+        pats = exclude.patterns()
+        root = str(paths.media_root())
 
         for i, r in enumerate(rows, start=1):
             ctx.raise_if_cancelled()
-            if _is_gone(r["path"]):
-                stale.append(r["id"])
+            if exclude.path_excluded(r["path"], pats, root):
+                excluded.append(r["id"])
+            elif _is_gone(r["path"]):
+                gone.append(r["id"])
             if i % 1000 == 0:
                 ctx.progress(90 * i / total if total else 90)
 
-        if total >= _GUARD_MIN_TOTAL and len(stale) / total > _GUARD_MAX_FRACTION:
+        checked = total - len(excluded)
+        if checked >= _GUARD_MIN_TOTAL and len(gone) / checked > _GUARD_MAX_FRACTION:
             raise RuntimeError(
-                f"refusing to remove {len(stale)}/{total} entries "
-                f"({len(stale) / total:.0%}) -- this looks like the media mount "
+                f"refusing to remove {len(gone)}/{checked} entries "
+                f"({len(gone) / checked:.0%}) -- this looks like the media mount "
                 "is missing rather than the files themselves; check the volume "
                 "mount and retry"
             )
+        stale = gone + excluded
 
         for i in range(0, len(stale), _DELETE_BATCH):
             ctx.raise_if_cancelled()
@@ -90,7 +102,8 @@ def run_cleanup(ctx) -> dict:
         con.commit()
 
         ctx.progress(100)
-        ctx.log(f"Checked {total} files, removed {len(stale)} stale entries.")
-        return {"checked": total, "removed": len(stale)}
+        ctx.log(f"Checked {total} files, removed {len(gone)} stale and "
+                f"{len(excluded)} excluded entries.")
+        return {"checked": total, "removed": len(stale), "excluded": len(excluded)}
     finally:
         con.close()

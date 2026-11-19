@@ -14,6 +14,8 @@ this check. The periodic full scan remains the safety net for it.
 import os
 from pathlib import Path
 
+from . import exclude
+
 
 def _reraise(exc: OSError) -> None:
     raise exc
@@ -30,7 +32,11 @@ def find_changed_dirs(root: Path, cutoff: float) -> list[Path]:
     -- the removal is still visible via its parent's mtime.
     """
     changed: list[Path] = []
+    pats = exclude.patterns()
     for dirpath, dirnames, _filenames in os.walk(root, onerror=_reraise):
+        # Same exclusions as the inventory scan: an excluded subtree must not
+        # trigger scans (a NAS indexer touching @eaDir every few minutes).
+        dirnames[:] = [d for d in dirnames if not exclude.is_excluded(d, pats)]
         try:
             mtime = os.stat(dirpath).st_mtime
         except OSError:

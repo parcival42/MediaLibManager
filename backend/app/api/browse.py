@@ -3,6 +3,7 @@ root, for the directory-scope picker (e.g. on the Duplicates page)."""
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import auth, paths
+from ..scan import exclude
 
 router = APIRouter(prefix="/api")
 
@@ -17,9 +18,10 @@ def browse(path: str | None = None, _: str = Depends(auth.current_user)):
         raise HTTPException(status_code=404, detail="directory not found")
 
     entries = []
+    pats = exclude.patterns()
     try:
         for p in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-            if p.is_dir() and not p.name.startswith("."):
+            if p.is_dir() and not p.name.startswith(".") and not exclude.is_excluded(p.name, pats):
                 entries.append({"name": p.name, "path": str(p)})
     except PermissionError:
         pass

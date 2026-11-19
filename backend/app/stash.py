@@ -11,8 +11,17 @@ Stash usually runs in its own container and sees the library under a
 different mount point; ``stash_media_path`` is that path, and every local path
 below ``media_root`` is rewritten onto it. Empty means "same path as here".
 
+Scan options: a bare ``metadataScan(paths)`` leaves every generate flag
+(covers, previews, sprites, phashes, ...) off, unlike a scan started from
+Stash's own UI, which sends the scan defaults configured in Stash. So the
+request carries those defaults too (``stash_scan_options_mode = "stash"``), or
+the user's own selection layered on top of them (``"custom"``). The flag names
+differ between Stash versions, so they are discovered via schema
+introspection instead of being hardcoded.
+
 Failures never propagate: Stash being down must not turn an otherwise
-successful rename/strip into an error. They are only logged.
+successful rename/strip into an error. They are logged, and the affected
+directories stay buffered for a retry (see the buffer section below).
 """
 import json
 import logging
@@ -23,7 +32,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config, paths
+from . import config, db, paths
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +42,12 @@ TIMEOUT = 10  # seconds per request
 MAX_SCAN_PATHS = 100
 # Cap on the directory list returned by ``status()``.
 STATUS_MAX_DIRS = 500
+# Minimum wait before retrying a failed request (also with a zero scan delay,
+# which would otherwise retry in a tight loop while Stash is down).
+RETRY_MIN_SECONDS = 60
+# After a restart, a batch that was already due is sent this long after
+# startup instead of immediately (Stash may be starting alongside this app).
+STARTUP_GRACE_SECONDS = 30
 
 
 class StashError(Exception):
@@ -68,6 +83,70 @@ def test_connection(url: str, api_key: str) -> str:
     return (data.get("version") or {}).get("version") or "unknown"
 
 
+# --- Scan options -----------------------------------------------------------
+
+_SCHEMA_QUERY = """
+query {
+  input: __type(name: "ScanMetadataInput") {
+    inputFields { name type { kind name ofType { kind name } } }
+  }
+  options: __type(name: "ScanMetadataOptions") { fields { name } }
+}
+"""
+
+
+def _is_boolean(type_ref: dict | None) -> bool:
+    if not type_ref:
+        return False
+    if type_ref.get("kind") == "NON_NULL":
+        type_ref = type_ref.get("ofType") or {}
+    return type_ref.get("kind") == "SCALAR" and type_ref.get("name") == "Boolean"
+
+
+def scan_options_info(url: str, api_key: str) -> dict:
+    """Boolean scan flags this Stash accepts, and its configured defaults.
+
+    Returns ``{"flags": [...], "stash_defaults": {flag: bool}}``. ``flags`` are
+    the Boolean fields of ``ScanMetadataInput`` (what a request may carry);
+    the defaults come from ``configuration.defaults.scan`` for the flags that
+    type also has. A Stash whose scan defaults were never saved reports
+    ``null`` there, which maps to all-false -- the same as its scan dialog.
+    """
+    if not url:
+        raise StashError("no Stash URL configured")
+    schema = _graphql(url, api_key, _SCHEMA_QUERY)
+    input_fields = ((schema.get("input") or {}).get("inputFields")) or []
+    flags = sorted(f["name"] for f in input_fields if _is_boolean(f.get("type")))
+    option_fields = {f["name"] for f in ((schema.get("options") or {}).get("fields") or [])}
+    readable = [f for f in flags if f in option_fields]
+
+    defaults: dict[str, bool] = {f: False for f in flags}
+    if readable:
+        data = _graphql(
+            url, api_key,
+            "query { configuration { defaults { scan { %s } } } }" % " ".join(readable),
+        )
+        scan = (((data.get("configuration") or {}).get("defaults") or {}).get("scan")) or {}
+        for f in readable:
+            defaults[f] = bool(scan.get(f))
+    return {"flags": flags, "stash_defaults": defaults}
+
+
+def _resolve_scan_options(url: str, api_key: str) -> dict[str, bool]:
+    """The generate flags to send with a scan, per ``stash_scan_options_mode``."""
+    info = scan_options_info(url, api_key)
+    options = dict(info["stash_defaults"])
+    if config.get("stash_scan_options_mode") == "custom":
+        custom = config.get("stash_scan_options") or {}
+        for flag in info["flags"]:
+            if flag in custom:
+                options[flag] = bool(custom[flag])
+        unknown = sorted(set(custom) - set(info["flags"]))
+        if unknown:
+            log.info("ignoring scan options this Stash does not know: %s", ", ".join(unknown))
+    return options
+
+
 def to_stash_path(path: str) -> str:
     """Map a local path below ``media_root`` onto Stash's view of the library."""
     stash_root = (config.get("stash_media_path") or "").rstrip("/")
@@ -92,19 +171,31 @@ def _collapse(directories: set[str]) -> list[str]:
     return out
 
 
-def scan_directories(directories: set[str]) -> str:
-    """Start a Stash scan of ``directories`` (local paths). Returns the job id."""
+def scan_directories(directories: set[str]) -> tuple[str, dict[str, bool]]:
+    """Start a Stash scan of ``directories`` (local paths).
+
+    Returns the job id and the generate flags that were sent.
+    """
+    url = config.get("stash_url") or ""
+    api_key = config.get("stash_api_key") or ""
     dirs = _collapse(directories)
     if len(dirs) > MAX_SCAN_PATHS:
         dirs = [str(paths.media_root())]
     scan_paths = [to_stash_path(d) for d in dirs]
+    # Options are best-effort: a Stash version without introspection or the
+    # configuration defaults must still get the plain scan (and an unreachable
+    # Stash fails at the mutation below anyway, which triggers the retry).
+    try:
+        options = _resolve_scan_options(url, api_key)
+    except StashError as exc:
+        log.warning("could not determine Stash scan options, scanning without: %s", exc)
+        options = {}
     data = _graphql(
-        config.get("stash_url") or "",
-        config.get("stash_api_key") or "",
+        url, api_key,
         "mutation($input: ScanMetadataInput!) { metadataScan(input: $input) }",
-        {"input": {"paths": scan_paths}},
+        {"input": {**options, "paths": scan_paths}},
     )
-    return str(data.get("metadataScan"))
+    return str(data.get("metadataScan")), options
 
 
 # --- Buffered scan requests -------------------------------------------------
@@ -112,15 +203,22 @@ def scan_directories(directories: set[str]) -> str:
 # Changed directories are collected and sent as one scan request
 # ``stash_scan_delay_minutes`` after the *first* change of a batch, rounded up
 # to the next full minute, so a series of renames doesn't fire a Stash scan
-# every minute or two.
-# The timer is not restarted by later changes -- with a sliding window,
-# continuous editing would postpone the scan indefinitely. Pending directories live only in
-# memory; a restart before the timer fires drops them (Stash's own scheduled
-# scan still catches up).
+# every minute or two. The timer is not restarted by later changes -- with a
+# sliding window, continuous editing would postpone the scan indefinitely.
+#
+# The buffer is mirrored into the ``stash_pending`` table: ``start()`` reloads
+# it after a restart, and a directory leaves it only once Stash accepted a
+# scan covering it. A failed request keeps everything and retries after the
+# scan delay (at least ``RETRY_MIN_SECONDS``). A directory changed again while
+# a request was in flight carries a newer ``last_changed_at`` than the one
+# sent, so it stays buffered for the next round.
 
-_pending: set[str] = set()
+_pending: dict[str, float] = {}  # directory -> last_changed_at
 _timer: threading.Timer | None = None
 _pending_lock = threading.Lock()
+# Serializes whole flushes (timer firing vs. "send now"), so the same batch
+# is never sent twice concurrently. Never taken while holding _pending_lock.
+_flush_lock = threading.Lock()
 # Bookkeeping for ``status()``, all guarded by ``_pending_lock``.
 _queued_at: float | None = None  # first change of the current batch
 _due_at: float | None = None     # when the timer fires
@@ -134,41 +232,143 @@ def _due_time(now: float, delay: float) -> float:
     return math.ceil((now + delay) / 60) * 60
 
 
+def _delay_seconds() -> float:
+    return max(0.0, float(config.get("stash_scan_delay_minutes") or 0)) * 60
+
+
+def _schedule_locked(queued_at: float, due_at: float) -> None:
+    """Arm the timer for ``due_at``. Caller holds ``_pending_lock`` and has
+    checked that no timer is armed."""
+    global _timer, _queued_at, _due_at
+    _queued_at = queued_at
+    _due_at = due_at
+    _timer = threading.Timer(max(0.0, due_at - time.time()), _on_timer)
+    _timer.daemon = True
+    _timer.name = "stash-scan-timer"
+    _timer.start()
+
+
+def _remove_sent_locked(snapshot: dict[str, float]) -> None:
+    """Drop the directories covered by a sent request -- unless changed again
+    since. Caller holds ``_pending_lock``."""
+    done = [d for d, changed in snapshot.items() if _pending.get(d) == changed]
+    for d in done:
+        del _pending[d]
+    con = db.connect()
+    try:
+        con.executemany(
+            "DELETE FROM stash_pending WHERE directory = ? AND last_changed_at <= ?",
+            [(d, snapshot[d]) for d in done],
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def _flush() -> None:
+    with _flush_lock:
+        _flush_serialized()
+
+
+def _on_timer() -> None:
+    """Timer entry point. A timer that fired while a "send now" was in
+    progress may have been superseded by the time it gets the flush lock
+    (e.g. replaced by a retry timer); only the currently armed one flushes."""
+    with _flush_lock:
+        with _pending_lock:
+            current = _timer is threading.current_thread()
+        if current:
+            _flush_serialized()
+
+
+def _flush_serialized() -> None:
     global _timer, _queued_at, _due_at, _last
     with _pending_lock:
-        directories = set(_pending)
-        _pending.clear()
+        snapshot = dict(_pending)
+        batch_queued_at = _queued_at
         if _timer is not None:
             _timer.cancel()  # no-op when running inside the timer itself
         _timer = None
         _queued_at = None
         _due_at = None
-    if not directories:
+    if not snapshot:
         return
-    result: dict = {"at": time.time(), "directories": len(directories),
-                    "ok": False, "job_id": None, "error": None}
+
+    result: dict = {"at": time.time(), "directories": len(snapshot),
+                    "ok": False, "job_id": None, "error": None, "options": None}
+    # Disabled meanwhile: drop the batch (nothing would ever send it, and
+    # re-enabling must not fire a scan for changes made long ago).
+    drop = False
     if not config.get("stash_enabled") or not config.get("stash_url"):
         result["error"] = "Stash integration disabled or no URL configured"
+        drop = True
     else:
         try:
-            result["job_id"] = scan_directories(directories)
+            result["job_id"], result["options"] = scan_directories(set(snapshot))
             result["ok"] = True
             log.info("Stash scan started for %d directories (job %s)",
-                     len(directories), result["job_id"])
+                     len(snapshot), result["job_id"])
         except StashError as exc:
             result["error"] = str(exc)
-            log.warning("Stash scan could not be started: %s", exc)
+            log.warning("Stash scan could not be started, will retry: %s", exc)
         except Exception as exc:  # noqa: BLE001 - background thread, nothing to propagate to
             result["error"] = f"unexpected error: {exc}"
-            log.exception("unexpected error triggering Stash scan")
+            log.exception("unexpected error triggering Stash scan, will retry")
+
     with _pending_lock:
+        if result["ok"] or drop:
+            try:
+                _remove_sent_locked(snapshot)
+            except Exception:  # noqa: BLE001
+                # The scan went out; at worst the rows are sent again later.
+                log.exception("could not clear sent Stash directories")
+        if _pending and _timer is None:
+            now = time.time()
+            if result["ok"] or drop:
+                # Leftovers changed during the send: a fresh batch.
+                _schedule_locked(now, _due_time(now, _delay_seconds()))
+            else:
+                _schedule_locked(batch_queued_at or now,
+                                 _due_time(now, max(_delay_seconds(), RETRY_MIN_SECONDS)))
+        if not result["ok"] and not drop:
+            result["retry_at"] = _due_at
         _last = result
 
 
 def flush_now() -> None:
     """Send the buffered scan request immediately instead of waiting for the timer."""
     _flush()
+
+
+def start() -> None:
+    """Reload the persisted buffer and re-arm its timer. Called at startup."""
+    con = db.connect()
+    try:
+        rows = con.execute(
+            "SELECT directory, first_queued_at, last_changed_at FROM stash_pending"
+        ).fetchall()
+    finally:
+        con.close()
+    if not rows:
+        return
+    with _pending_lock:
+        for r in rows:
+            _pending[r["directory"]] = r["last_changed_at"]
+        if _timer is None:
+            queued_at = min(r["first_queued_at"] for r in rows)
+            due_at = max(_due_time(queued_at, _delay_seconds()),
+                         time.time() + STARTUP_GRACE_SECONDS)
+            _schedule_locked(queued_at, due_at)
+    log.info("restored %d pending Stash scan directories", len(rows))
+
+
+def stop() -> None:
+    """Disarm the timer; the persisted buffer is picked up again by ``start``."""
+    global _timer
+    with _pending_lock:
+        if _timer is not None:
+            _timer.cancel()
+            _timer = None
 
 
 def status() -> dict:
@@ -193,22 +393,31 @@ def notify_changed(file_paths, log_fn=None) -> None:
     (see above). No-op when the integration is disabled or nothing changed.
     ``log_fn`` (e.g. a task's ``ctx.log``) gets a note that a scan is queued.
     """
-    global _timer, _queued_at, _due_at
     if not config.get("stash_enabled") or not config.get("stash_url"):
         return
     directories = {os.path.dirname(p) for p in file_paths if p}
     if not directories:
         return
-    delay = max(0.0, float(config.get("stash_scan_delay_minutes") or 0)) * 60
+    now = time.time()
     with _pending_lock:
-        _pending.update(directories)
+        for d in directories:
+            _pending[d] = now
+        try:
+            con = db.connect()
+            try:
+                con.executemany(
+                    "INSERT INTO stash_pending(directory, first_queued_at, last_changed_at) "
+                    "VALUES(?, ?, ?) ON CONFLICT(directory) DO UPDATE SET "
+                    "last_changed_at = excluded.last_changed_at",
+                    [(d, now, now) for d in directories],
+                )
+                con.commit()
+            finally:
+                con.close()
+        except Exception:  # noqa: BLE001 - the in-memory buffer still sends it
+            log.exception("could not persist pending Stash directories")
         if _timer is None:
-            _queued_at = time.time()
-            _due_at = _due_time(_queued_at, delay)
-            _timer = threading.Timer(_due_at - _queued_at, _flush)
-            _timer.daemon = True
-            _timer.name = "stash-scan-timer"
-            _timer.start()
+            _schedule_locked(now, _due_time(now, _delay_seconds()))
         due_at = _due_at
     if log_fn:
         try:
