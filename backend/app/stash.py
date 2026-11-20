@@ -103,14 +103,24 @@ def _is_boolean(type_ref: dict | None) -> bool:
     return type_ref.get("kind") == "SCALAR" and type_ref.get("name") == "Boolean"
 
 
+# What Stash's own scan dialog starts with when no scan options were ever
+# saved (hardcoded in its frontend); every other flag is off.
+_STASH_UI_FALLBACK = {"scanGenerateCovers": True}
+
+
 def scan_options_info(url: str, api_key: str) -> dict:
     """Boolean scan flags this Stash accepts, and its configured defaults.
 
     Returns ``{"flags": [...], "stash_defaults": {flag: bool}}``. ``flags`` are
-    the Boolean fields of ``ScanMetadataInput`` (what a request may carry);
-    the defaults come from ``configuration.defaults.scan`` for the flags that
-    type also has. A Stash whose scan defaults were never saved reports
-    ``null`` there, which maps to all-false -- the same as its scan dialog.
+    the Boolean fields of ``ScanMetadataInput`` (what a request may carry).
+
+    The defaults are resolved the same way Stash's scan dialog does it:
+    current Stash versions save the dialog's options in the UI config blob
+    (``configuration.ui.taskDefaults.scan``); older ones used
+    ``configuration.defaults.scan``, which newer versions report as ``null``
+    unless it was set back then. With neither present, the dialog's built-in
+    fallback applies. Flags missing from a saved set count as off -- the
+    dialog does not send them either.
     """
     if not url:
         raise StashError("no Stash URL configured")
@@ -120,15 +130,19 @@ def scan_options_info(url: str, api_key: str) -> dict:
     option_fields = {f["name"] for f in ((schema.get("options") or {}).get("fields") or [])}
     readable = [f for f in flags if f in option_fields]
 
-    defaults: dict[str, bool] = {f: False for f in flags}
-    if readable:
-        data = _graphql(
-            url, api_key,
-            "query { configuration { defaults { scan { %s } } } }" % " ".join(readable),
-        )
-        scan = (((data.get("configuration") or {}).get("defaults") or {}).get("scan")) or {}
-        for f in readable:
-            defaults[f] = bool(scan.get(f))
+    legacy_query = " defaults { scan { %s } }" % " ".join(readable) if readable else ""
+    data = _graphql(url, api_key, "query { configuration { ui%s } }" % legacy_query)
+    configuration = data.get("configuration") or {}
+
+    ui = configuration.get("ui")
+    task_defaults = ui.get("taskDefaults") if isinstance(ui, dict) else None
+    saved = task_defaults.get("scan") if isinstance(task_defaults, dict) else None
+    if not isinstance(saved, dict):
+        saved = (configuration.get("defaults") or {}).get("scan")
+    if not isinstance(saved, dict):
+        saved = _STASH_UI_FALLBACK
+
+    defaults = {f: bool(saved.get(f)) for f in flags}
     return {"flags": flags, "stash_defaults": defaults}
 
 
