@@ -96,17 +96,25 @@ export function Toggle({
   )
 }
 
+const SEGMENTED_SIZE = {
+  md: { wrap: 'gap-1 rounded-xl p-1', item: 'rounded-lg px-3 py-1.5 text-[13px]' },
+  sm: { wrap: 'gap-0.5 rounded-lg p-0.5', item: 'rounded-md px-2.5 py-1 text-xs' },
+}
+
 export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  size = 'md',
 }: {
   value: T
   options: { value: T; label: ReactNode }[]
   onChange: (v: T) => void
+  size?: 'sm' | 'md'
 }) {
+  const s = SEGMENTED_SIZE[size]
   return (
-    <div className="flex flex-wrap gap-1 rounded-xl border border-line bg-bg/60 p-1">
+    <div className={`flex flex-wrap border border-line bg-bg/60 ${s.wrap}`}>
       {options.map((o) => {
         const active = o.value === value
         return (
@@ -115,7 +123,7 @@ export function Segmented<T extends string>({
             type="button"
             aria-pressed={active}
             onClick={() => onChange(o.value)}
-            className={`rounded-lg px-3 py-1.5 text-[13px] font-medium transition ${
+            className={`${s.item} font-medium transition ${
               active ? 'bg-surface-3 text-accent shadow-sm' : 'text-ink-2 hover:bg-white/5 hover:text-ink-1'
             }`}
           >

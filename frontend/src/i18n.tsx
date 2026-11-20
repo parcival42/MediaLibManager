@@ -197,6 +197,7 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   dup_scope_choose: { de: 'Verzeichnis wählen', en: 'Choose directory' },
   dup_scope_all: { de: 'Gesamte Bibliothek', en: 'Entire library' },
   dup_scope_label: { de: 'Bereich', en: 'Scope' },
+  dup_common_path: { de: 'Gemeinsamer Pfad aller Kopien', en: 'Path shared by all copies' },
   dup_scope_clear: { de: 'Zurücksetzen', en: 'Reset' },
   dup_tree_error: { de: 'Verzeichnis konnte nicht geladen werden.', en: 'Could not load directory.' },
 

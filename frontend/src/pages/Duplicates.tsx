@@ -12,9 +12,7 @@ import {
   EmptyState,
   LoadingPane,
   Modal,
-  PageHeader,
   Segmented,
-  SelectionBar,
 } from '../components/ui'
 import {
   IconArrowLeft,
@@ -276,40 +274,40 @@ export default function Duplicates() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader
-        title={t('nav_duplicates')}
-        subtitle={t('dup_subtitle')}
-        actions={
-          <Button onClick={() => rebuildMut.mutate(pendingScope)} disabled={rebuilding}>
-            <IconScan />
-            {rebuilding
-              ? `${t('dup_rebuilding')} ${Math.round(rebuildTask.data?.progress ?? 0)}%`
-              : t('dup_rebuild')}
-          </Button>
-        }
-      />
-
-      {/* Scan setup: what the next rebuild covers. */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      {/* Row 1: title + scan setup (what the next rebuild covers). Replaces
+          the full PageHeader to leave the height to the groups. */}
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <h1 className="font-head text-xl font-semibold tracking-tight">{t('nav_duplicates')}</h1>
+        <span className="h-5 w-px bg-line" />
         <ScopePicker value={pendingScope} onChange={setPendingScope} />
         {appliedScope && (
           <Badge tone="neutral" title={appliedScope} className="max-w-[24rem]">
             {t('dup_scope_label')}: <span className="min-w-0 truncate font-mono font-normal">{appliedScope}</span>
           </Badge>
         )}
-        <Checkbox
-          className="ml-auto"
-          checked={deepEnabled}
-          disabled={deepMut.isPending || rebuilding}
-          onChange={(v) => deepMut.mutate(v)}
-          title={t('dup_deep_enabled_hint')}
-          label={t('dup_deep_enabled')}
-        />
+        <div className="ml-auto flex items-center gap-4">
+          <Checkbox
+            checked={deepEnabled}
+            disabled={deepMut.isPending || rebuilding}
+            onChange={(v) => deepMut.mutate(v)}
+            title={t('dup_deep_enabled_hint')}
+            label={t('dup_deep_enabled')}
+          />
+          <Button size="sm" onClick={() => rebuildMut.mutate(pendingScope)} disabled={rebuilding}>
+            <IconScan />
+            {rebuilding
+              ? `${t('dup_rebuilding')} ${Math.round(rebuildTask.data?.progress ?? 0)}%`
+              : t('dup_rebuild')}
+          </Button>
+        </div>
       </div>
 
-      {/* Result view: filter by kind, sort. */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      {/* Row 2: result filter + sort + counts + selection actions. Stays in
+          view because only the group list below scrolls. The file-level
+          actions are always rendered (disabled when idle) so it never shifts. */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line pb-3">
         <Segmented
+          size="sm"
           value={kind}
           onChange={setKind}
           options={[
@@ -322,76 +320,71 @@ export default function Duplicates() {
             { value: 'deep', label: t('dup_kind_deep') },
           ]}
         />
-        <div className="ml-auto">
-          <Segmented
-            value={sort}
-            onChange={setSort}
-            options={[
-              ...(!kind ? [{ value: 'kind' as SortKey, label: t('dup_sort_kind') }] : []),
-              { value: 'path', label: t('dup_sort_path') },
-              { value: 'size', label: t('dup_sort_size') },
-            ]}
-          />
+        <Segmented
+          size="sm"
+          value={sort}
+          onChange={setSort}
+          options={[
+            ...(!kind ? [{ value: 'kind' as SortKey, label: t('dup_sort_kind') }] : []),
+            { value: 'path', label: t('dup_sort_path') },
+            { value: 'size', label: t('dup_sort_size') },
+          ]}
+        />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <span className="text-xs text-ink-3">
+            {groups.length.toLocaleString()} {t('dup_groups_count')}
+          </span>
+          {totalReclaimable > 0 && (
+            <span className="text-xs tabular-nums text-ink-2">
+              {formatSize(totalReclaimable)} {t('dup_reclaimable')}
+            </span>
+          )}
+          <span className="mx-1 h-5 w-px bg-line" />
+          {selectedGroups.size > 0 && (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedGroups(new Set())}>
+                {t('dup_deselect_all')}
+              </Button>
+              <Button size="sm" variant="subtle" onClick={onIgnoreSelectedGroups} disabled={ignoreMut.isPending}>
+                {`${t('dup_ignore_selected')} (${selectedGroups.size})`}
+              </Button>
+              <span className="mx-1 h-5 w-px bg-line" />
+            </>
+          )}
+          <Button size="sm" variant="subtle" onClick={selectAllButKept} disabled={groups.length === 0}>
+            {t('dup_select_others')}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
+            {t('dup_deselect_all')}
+          </Button>
+          <Button size="sm" variant="danger" onClick={onDelete} disabled={deleting || selected.size === 0}>
+            {deleting ? t('dup_deleting') : `${t('dup_delete')} (${selected.size})`}
+          </Button>
         </div>
       </div>
-
-      {/* Counts + selection actions. The file-level actions are always
-          rendered (disabled when idle) so the list never shifts. */}
-      <SelectionBar
-        summary={
-          <>
-            <span>
-              {groups.length.toLocaleString()} {t('dup_groups_count')}
-            </span>
-            {totalReclaimable > 0 && (
-              <span className="tabular-nums text-ink-2">
-                {formatSize(totalReclaimable)} {t('dup_reclaimable')}
-              </span>
-            )}
-          </>
-        }
-        actions={
-          <>
-            {selectedGroups.size > 0 && (
-              <>
-                <Button size="sm" variant="ghost" onClick={() => setSelectedGroups(new Set())}>
-                  {t('dup_deselect_all')}
-                </Button>
-                <Button size="sm" variant="subtle" onClick={onIgnoreSelectedGroups} disabled={ignoreMut.isPending}>
-                  {`${t('dup_ignore_selected')} (${selectedGroups.size})`}
-                </Button>
-                <span className="mx-1 h-5 w-px bg-line" />
-              </>
-            )}
-            <Button size="sm" variant="subtle" onClick={selectAllButKept} disabled={groups.length === 0}>
-              {t('dup_select_others')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
-              {t('dup_deselect_all')}
-            </Button>
-            <Button size="sm" variant="danger" onClick={onDelete} disabled={deleting || selected.size === 0}>
-              {deleting ? t('dup_deleting') : `${t('dup_delete')} (${selected.size})`}
-            </Button>
-          </>
-        }
-      />
 
       {list.isLoading ? (
         <LoadingPane />
       ) : groups.length === 0 ? (
         <EmptyState text={t('dup_none')} />
       ) : (
-        <div className="min-h-0 flex-1 space-y-4 overflow-auto pr-1">
+        <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
           {sortedGroups.map((g) => {
             const isIgnored = g.ignored
+            const common = commonDir(g.members)
             return (
-            <Card key={g.id} className={`p-4 transition ${isIgnored ? 'opacity-40' : ''}`}>
-              <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
+            <Card key={g.id} className={`px-3 pb-3 pt-2 transition ${isIgnored ? 'opacity-40' : ''}`}>
+              <div className="mb-2 flex items-center gap-3 text-xs">
                 <Badge tone="neutral">{t(KIND_LABEL[g.kind] ?? g.kind)}</Badge>
-                <span className="tabular-nums text-ink-3">
+                <span className="shrink-0 tabular-nums text-ink-3">
                   {g.members.length} · {formatSize(g.reclaimable)} {t('dup_reclaimable')}
                 </span>
-                <div className="ml-auto flex items-center gap-3">
+                {common && (
+                  <span className="min-w-0 truncate font-mono text-[11px] text-ink-3" title={t('dup_common_path')}>
+                    {common}/
+                  </span>
+                )}
+                <div className="ml-auto flex shrink-0 items-center gap-3">
                   <Button
                     size="sm"
                     variant={isIgnored ? 'link' : 'ghost'}
@@ -408,13 +401,14 @@ export default function Duplicates() {
                   />
                 </div>
               </div>
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-2.5">
                 {g.members.map((m) => {
                   const imageMembers = g.members.filter((x) => x.type === 'image')
                   return (
                     <DuplicateCard
                       key={m.id}
                       m={m}
+                      commonDir={common}
                       selected={selected.has(m.id)}
                       onToggle={() => toggle(m.id)}
                       onOpen={() =>
@@ -464,8 +458,26 @@ export default function Duplicates() {
   )
 }
 
+/** Directory part of a member's path (filename removed, no trailing slash). */
+function dirOf(m: Member): string {
+  return m.path.slice(0, m.path.length - m.filename.length).replace(/[\\/]+$/, '')
+}
+
+/** Longest directory prefix shared by all members, on whole path segments
+ * ("/a/bc" and "/a/bd" share "/a", not "/a/b"). Shown once in the group
+ * header so each card only carries the part that differs. */
+function commonDir(members: Member[]): string {
+  if (members.length === 0) return ''
+  const split = members.map((m) => dirOf(m).split('/'))
+  const first = split[0]
+  let n = 0
+  while (n < first.length && split.every((s) => s[n] === first[n])) n++
+  return first.slice(0, n).join('/')
+}
+
 function DuplicateCard({
   m,
+  commonDir,
   selected,
   onToggle,
   onOpen,
@@ -473,6 +485,7 @@ function DuplicateCard({
   t,
 }: {
   m: Member
+  commonDir: string
   selected: boolean
   onToggle: () => void
   onOpen: () => void
@@ -486,8 +499,12 @@ function DuplicateCard({
   const frames = Array.from({ length: m.frame_count ?? 0 }, (_, i) => `/api/media/${m.id}/frame/${i}`)
   const showStrip = isVideo && frames.length > 0
 
-  // Directory portion of the path (filename shown separately above it).
-  const dir = m.path.slice(0, m.path.length - m.filename.length).replace(/[\\/]+$/, '')
+  // Directory below the group's common prefix (shown in the group header).
+  // Its first segment is where the copies diverge, so it gets highlighted.
+  const rest = dirOf(m).slice(commonDir.length).replace(/^[\\/]+/, '')
+  const slash = rest.indexOf('/')
+  const diverge = slash === -1 ? rest : rest.slice(0, slash)
+  const tail = slash === -1 ? '' : rest.slice(slash)
 
   // One technical meta line: "dur | res | codec | size".
   const res = m.width && m.height ? `${m.width}×${m.height}${isVideo ? '' : 'px'}` : '?'
@@ -509,68 +526,76 @@ function DuplicateCard({
     onToggle()
   }
 
-  // Card states: kept copy = green, marked-for-deletion = red,
-  // an unselected (spared) candidate is dimmed and neutral.
+  // Card states: marked for deletion = red, suggested keep = green, an
+  // unselected (spared) candidate is dimmed and neutral. Any member can be
+  // marked -- including the suggested keep -- as long as one copy survives.
   const cardState = selected
-    ? 'border-danger/30 bg-danger/[0.06]'
+    ? 'border-danger/40 bg-danger/[0.07]'
     : m.is_keep
-      ? 'border-ok/30 bg-ok/[0.06]'
-      : 'border-line bg-surface-2 opacity-60'
+      ? 'border-ok/40 bg-ok/[0.07]'
+      : 'border-line bg-surface-2 opacity-60 hover:opacity-100'
 
   // Click anywhere on the card toggles selection; thumbnail click opens media dialog;
   // individual frame clicks open a full-size frame lightbox.
   return (
     <div
       onClick={onToggle}
-      className={`w-[265px] cursor-pointer break-all rounded-xl border p-3 transition ${cardState}`}
+      title={m.path}
+      className={`w-[265px] cursor-pointer rounded-xl border p-2.5 transition ${cardState}`}
     >
-      {/* Keep / delete role badge — reflects actual selection, never implies an
-          action that hasn't been explicitly chosen. */}
-      <div className="mb-2">
-        {m.is_keep ? (
-          <Badge tone="accent">
-            <IconCheck width={12} height={12} />
-            {t('dup_keep')}
-          </Badge>
-        ) : selected ? (
-          <Badge tone="danger">
-            <IconX width={12} height={12} />
-            {t('dup_delete_label')}
-          </Badge>
+      {/* Preview with the role marker (top left) and the delete checkbox (top
+          right) laid over it, instead of two rows of their own. */}
+      <div className="relative mb-2">
+        {m.has_thumb ? (
+          <img
+            src={`/api/media/${m.id}/thumb`}
+            alt={m.filename}
+            loading="lazy"
+            onClick={openPreview}
+            onAuxClick={(e) => {
+              // Middle-click opens the original in a new browser tab for a
+              // side-by-side comparison outside the app.
+              if (e.button === 1) {
+                e.preventDefault()
+                e.stopPropagation()
+                window.open(`/api/media/${m.id}`, '_blank', 'noopener')
+              }
+            }}
+            title={t('dup_open_preview')}
+            className="block h-40 w-full cursor-zoom-in rounded-md bg-bg object-contain"
+          />
         ) : (
-          <Badge tone="neutral">{t('dup_duplicate_label')}</Badge>
+          <div
+            onClick={openPreview}
+            title={t('dup_open_preview')}
+            className="flex h-20 w-full cursor-zoom-in items-center justify-center gap-1.5 rounded-md bg-bg text-xs text-ink-3"
+          >
+            <Icon width={18} height={18} className="opacity-60" />
+            {t('dup_no_preview')}
+          </div>
         )}
-      </div>
-
-      {/* Large preview — click to open the media dialog */}
-      {m.has_thumb ? (
-        <img
-          src={`/api/media/${m.id}/thumb`}
-          alt={m.filename}
-          loading="lazy"
-          onClick={openPreview}
-          onAuxClick={(e) => {
-            // Middle-click opens the original in a new browser tab for a
-            // side-by-side comparison outside the app.
-            if (e.button === 1) {
-              e.preventDefault()
-              e.stopPropagation()
-              window.open(`/api/media/${m.id}`, '_blank', 'noopener')
-            }
-          }}
-          title={t('dup_open_preview')}
-          className="mb-2 block max-h-40 w-full cursor-zoom-in rounded-md bg-bg object-contain"
-        />
-      ) : (
-        <div
-          onClick={openPreview}
-          title={t('dup_open_preview')}
-          className="mb-2 flex h-20 w-full cursor-zoom-in items-center justify-center gap-1.5 rounded-md bg-bg text-xs text-ink-3"
+        {m.is_keep && !selected && (
+          <span className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-bg/80 px-1.5 py-0.5 text-[10px] font-semibold text-accent backdrop-blur">
+            <IconCheck width={10} height={10} strokeWidth={3} />
+            {t('dup_keep')}
+          </span>
+        )}
+        {/* A real button so it is reachable by keyboard; stops propagation so
+            the card's own click handler doesn't toggle a second time. */}
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={t('dup_delete_label')}
+          title={t('dup_delete_label')}
+          onClick={stopToggle}
+          className={`absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-md border backdrop-blur ${
+            selected ? 'border-danger bg-danger text-bg' : 'border-white/40 bg-bg/70 text-transparent hover:border-white/70'
+          }`}
         >
-          <Icon width={18} height={18} className="opacity-60" />
-          {t('dup_no_preview')}
-        </div>
-      )}
+          <IconCheck width={12} height={12} strokeWidth={3} />
+        </button>
+      </div>
 
       {/* Frame strip — each frame opens a full-size view of that specific frame */}
       {showStrip && (
@@ -595,34 +620,20 @@ function DuplicateCard({
         </div>
       )}
 
-      {/* Filename, directory, technical meta */}
-      <div className="text-[13px] font-semibold text-ink-1" title={m.filename}>
-        {m.filename}
+      {/* Filename, directory below the common prefix, technical meta --
+          one line each, full path in the card's tooltip. */}
+      <div className="truncate text-[13px] font-semibold text-ink-1">{m.filename}</div>
+      <div className="truncate font-mono text-[11px] text-ink-3">
+        {diverge ? (
+          <>
+            <span className="rounded bg-warn/10 px-0.5 text-warn">{diverge}</span>
+            {tail}
+          </>
+        ) : (
+          './'
+        )}
       </div>
-      <div className="mt-0.5 whitespace-pre-wrap font-mono text-[11px] text-ink-3" title={m.path}>
-        {dir}
-      </div>
-      <div className="mt-1 text-xs tabular-nums text-ink-2">{meta}</div>
-
-      {/* Delete checkbox — toggles selection (kept copy starts unchecked).
-          A real button so it is reachable by keyboard; stops propagation so
-          the card's own click handler doesn't toggle a second time. */}
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={selected}
-        onClick={stopToggle}
-        className="mt-2.5 flex items-center gap-1.5 rounded text-xs"
-      >
-        <span
-          className={`flex h-4 w-4 items-center justify-center rounded border ${
-            selected ? 'border-danger bg-danger text-bg' : 'border-surface-4 text-transparent'
-          }`}
-        >
-          <IconCheck width={11} height={11} strokeWidth={3} />
-        </span>
-        <span className={selected ? 'text-danger' : 'text-ink-3'}>{t('dup_delete_label')}</span>
-      </button>
+      <div className="mt-0.5 truncate text-[11.5px] tabular-nums text-ink-2">{meta}</div>
     </div>
   )
 }
