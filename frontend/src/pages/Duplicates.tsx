@@ -351,7 +351,13 @@ export default function Duplicates() {
               <span className="mx-1 h-5 w-px bg-line" />
             </>
           )}
-          <Button size="sm" variant="subtle" onClick={selectAllButKept} disabled={groups.length === 0}>
+          <Button
+            size="sm"
+            variant="subtle"
+            onClick={selectAllButKept}
+            disabled={groups.length === 0}
+            title={t('dup_select_others_hint')}
+          >
             {t('dup_select_others')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
@@ -372,6 +378,7 @@ export default function Duplicates() {
           {sortedGroups.map((g) => {
             const isIgnored = g.ignored
             const common = commonDir(g.members)
+            const groupMarked = g.members.some((m) => selected.has(m.id))
             return (
             <Card key={g.id} className={`px-3 pb-3 pt-2 transition ${isIgnored ? 'opacity-40' : ''}`}>
               <div className="mb-2 flex items-center gap-3 text-xs">
@@ -409,6 +416,7 @@ export default function Duplicates() {
                       key={m.id}
                       m={m}
                       commonDir={common}
+                      groupMarked={groupMarked}
                       selected={selected.has(m.id)}
                       onToggle={() => toggle(m.id)}
                       onOpen={() =>
@@ -479,6 +487,7 @@ function DuplicateCard({
   m,
   commonDir,
   selected,
+  groupMarked,
   onToggle,
   onOpen,
   onOpenFrame,
@@ -487,6 +496,8 @@ function DuplicateCard({
   m: Member
   commonDir: string
   selected: boolean
+  /** Whether any member of this card's group is marked for deletion. */
+  groupMarked: boolean
   onToggle: () => void
   onOpen: () => void
   onOpenFrame: (src: string) => void
@@ -526,14 +537,18 @@ function DuplicateCard({
     onToggle()
   }
 
-  // Card states: marked for deletion = red, suggested keep = green, an
-  // unselected (spared) candidate is dimmed and neutral. Any member can be
-  // marked -- including the suggested keep -- as long as one copy survives.
+  // Card states show the outcome of the current selection, not the
+  // suggestion: once anything in the group is marked, marked = red (deleted)
+  // and every other copy = green (stays). Before that, the suggested keep
+  // (what "Select all suggestions" would spare) only gets a subtle green
+  // border. Any member can be marked as long as one copy survives.
   const cardState = selected
     ? 'border-danger/40 bg-danger/[0.07]'
-    : m.is_keep
+    : groupMarked
       ? 'border-ok/40 bg-ok/[0.07]'
-      : 'border-line bg-surface-2 opacity-60 hover:opacity-100'
+      : m.is_keep
+        ? 'border-ok/40 bg-surface-2'
+        : 'border-line bg-surface-2'
 
   // Click anywhere on the card toggles selection; thumbnail click opens media dialog;
   // individual frame clicks open a full-size frame lightbox.
@@ -543,8 +558,7 @@ function DuplicateCard({
       title={m.path}
       className={`w-[265px] cursor-pointer rounded-xl border p-2.5 transition ${cardState}`}
     >
-      {/* Preview with the role marker (top left) and the delete checkbox (top
-          right) laid over it, instead of two rows of their own. */}
+      {/* Preview with the delete checkbox laid over it (top right). */}
       <div className="relative mb-2">
         {m.has_thumb ? (
           <img
@@ -573,12 +587,6 @@ function DuplicateCard({
             <Icon width={18} height={18} className="opacity-60" />
             {t('dup_no_preview')}
           </div>
-        )}
-        {m.is_keep && !selected && (
-          <span className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-bg/80 px-1.5 py-0.5 text-[10px] font-semibold text-accent backdrop-blur">
-            <IconCheck width={10} height={10} strokeWidth={3} />
-            {t('dup_keep')}
-          </span>
         )}
         {/* A real button so it is reachable by keyboard; stops propagation so
             the card's own click handler doesn't toggle a second time. */}

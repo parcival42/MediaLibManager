@@ -172,6 +172,10 @@ const STRINGS: Record<string, { de: string; en: string }> = {
   dup_saturation: { de: 'Sättigung', en: 'Saturation' },
   dup_frames_match: { de: 'Frames gleich', en: 'frames match' },
   dup_select_others: { de: 'Alle Vorschläge selektieren', en: 'Select all suggestions' },
+  dup_select_others_hint: {
+    de: 'Markiert in jeder Gruppe alle Dateien außer der grün umrandeten (höchste Auflösung, dann größte, dann älteste Datei).',
+    en: 'Marks every file in each group except the one with the green border (highest resolution, then largest, then oldest file).',
+  },
   dup_deselect_all: { de: 'Auswahl aufheben', en: 'Clear selection' },
   dup_selected_count: { de: 'ausgewählt', en: 'selected' },
   dup_delete: { de: 'Auswahl löschen', en: 'Delete selected' },
