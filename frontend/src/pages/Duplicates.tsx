@@ -381,13 +381,13 @@ export default function Duplicates() {
             const groupMarked = g.members.some((m) => selected.has(m.id))
             return (
             <Card key={g.id} className={`px-3 pb-3 pt-2 transition ${isIgnored ? 'opacity-40' : ''}`}>
-              <div className="mb-2 flex items-center gap-3 text-xs">
+              <div className="mb-2 flex items-start gap-3 text-xs">
                 <Badge tone="neutral">{t(KIND_LABEL[g.kind] ?? g.kind)}</Badge>
-                <span className="shrink-0 tabular-nums text-ink-3">
+                <span className="shrink-0 pt-0.5 tabular-nums text-ink-3">
                   {g.members.length} · {formatSize(g.reclaimable)} {t('dup_reclaimable')}
                 </span>
                 {common && (
-                  <span className="min-w-0 truncate font-mono text-[11px] text-ink-3" title={t('dup_common_path')}>
+                  <span className="min-w-0 break-all pt-0.5 font-mono text-[11px] text-ink-3" title={t('dup_common_path')}>
                     {common}/
                   </span>
                 )}
@@ -628,10 +628,10 @@ function DuplicateCard({
         </div>
       )}
 
-      {/* Filename, directory below the common prefix, technical meta --
-          one line each, full path in the card's tooltip. */}
-      <div className="truncate text-[13px] font-semibold text-ink-1">{m.filename}</div>
-      <div className="truncate font-mono text-[11px] text-ink-3">
+      {/* Filename and directory below the common prefix are shown in full
+          (wrapped, never truncated): they are what the copies get compared by. */}
+      <div className="break-all text-[13px] font-semibold text-ink-1">{m.filename}</div>
+      <div className="break-all font-mono text-[11px] text-ink-3">
         {diverge ? (
           <>
             <span className="rounded bg-warn/10 px-0.5 text-warn">{diverge}</span>
