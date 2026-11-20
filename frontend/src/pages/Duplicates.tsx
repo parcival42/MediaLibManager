@@ -377,21 +377,15 @@ export default function Duplicates() {
         <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
           {sortedGroups.map((g) => {
             const isIgnored = g.ignored
-            const common = commonDir(g.members)
             const groupMarked = g.members.some((m) => selected.has(m.id))
             return (
             <Card key={g.id} className={`px-3 pb-3 pt-2 transition ${isIgnored ? 'opacity-40' : ''}`}>
-              <div className="mb-2 flex items-start gap-3 text-xs">
+              <div className="mb-2 flex items-center gap-3 text-xs">
                 <Badge tone="neutral">{t(KIND_LABEL[g.kind] ?? g.kind)}</Badge>
-                <span className="shrink-0 pt-0.5 tabular-nums text-ink-3">
+                <span className="tabular-nums text-ink-3">
                   {g.members.length} · {formatSize(g.reclaimable)} {t('dup_reclaimable')}
                 </span>
-                {common && (
-                  <span className="min-w-0 break-all pt-0.5 font-mono text-[11px] text-ink-3" title={t('dup_common_path')}>
-                    {common}/
-                  </span>
-                )}
-                <div className="ml-auto flex shrink-0 items-center gap-3">
+                <div className="ml-auto flex items-center gap-3">
                   <Button
                     size="sm"
                     variant={isIgnored ? 'link' : 'ghost'}
@@ -415,7 +409,6 @@ export default function Duplicates() {
                     <DuplicateCard
                       key={m.id}
                       m={m}
-                      commonDir={common}
                       groupMarked={groupMarked}
                       selected={selected.has(m.id)}
                       onToggle={() => toggle(m.id)}
@@ -466,26 +459,8 @@ export default function Duplicates() {
   )
 }
 
-/** Directory part of a member's path (filename removed, no trailing slash). */
-function dirOf(m: Member): string {
-  return m.path.slice(0, m.path.length - m.filename.length).replace(/[\\/]+$/, '')
-}
-
-/** Longest directory prefix shared by all members, on whole path segments
- * ("/a/bc" and "/a/bd" share "/a", not "/a/b"). Shown once in the group
- * header so each card only carries the part that differs. */
-function commonDir(members: Member[]): string {
-  if (members.length === 0) return ''
-  const split = members.map((m) => dirOf(m).split('/'))
-  const first = split[0]
-  let n = 0
-  while (n < first.length && split.every((s) => s[n] === first[n])) n++
-  return first.slice(0, n).join('/')
-}
-
 function DuplicateCard({
   m,
-  commonDir,
   selected,
   groupMarked,
   onToggle,
@@ -494,7 +469,6 @@ function DuplicateCard({
   t,
 }: {
   m: Member
-  commonDir: string
   selected: boolean
   /** Whether any member of this card's group is marked for deletion. */
   groupMarked: boolean
@@ -510,12 +484,8 @@ function DuplicateCard({
   const frames = Array.from({ length: m.frame_count ?? 0 }, (_, i) => `/api/media/${m.id}/frame/${i}`)
   const showStrip = isVideo && frames.length > 0
 
-  // Directory below the group's common prefix (shown in the group header).
-  // Its first segment is where the copies diverge, so it gets highlighted.
-  const rest = dirOf(m).slice(commonDir.length).replace(/^[\\/]+/, '')
-  const slash = rest.indexOf('/')
-  const diverge = slash === -1 ? rest : rest.slice(0, slash)
-  const tail = slash === -1 ? '' : rest.slice(slash)
+  // Directory portion of the path (filename shown separately above it).
+  const dir = m.path.slice(0, m.path.length - m.filename.length).replace(/[\\/]+$/, '')
 
   // One technical meta line: "dur | res | codec | size".
   const res = m.width && m.height ? `${m.width}×${m.height}${isVideo ? '' : 'px'}` : '?'
@@ -555,7 +525,6 @@ function DuplicateCard({
   return (
     <div
       onClick={onToggle}
-      title={m.path}
       className={`w-[265px] cursor-pointer rounded-xl border p-2.5 transition ${cardState}`}
     >
       {/* Preview with the delete checkbox laid over it (top right). */}
@@ -628,19 +597,10 @@ function DuplicateCard({
         </div>
       )}
 
-      {/* Filename and directory below the common prefix are shown in full
-          (wrapped, never truncated): they are what the copies get compared by. */}
+      {/* Filename and full directory, wrapped and never truncated: they are
+          what the copies get compared by. */}
       <div className="break-all text-[13px] font-semibold text-ink-1">{m.filename}</div>
-      <div className="break-all font-mono text-[11px] text-ink-3">
-        {diverge ? (
-          <>
-            <span className="rounded bg-warn/10 px-0.5 text-warn">{diverge}</span>
-            {tail}
-          </>
-        ) : (
-          './'
-        )}
-      </div>
+      <div className="mt-0.5 whitespace-pre-wrap break-all font-mono text-[11px] text-ink-3">{dir}</div>
       <div className="mt-0.5 truncate text-[11.5px] tabular-nums text-ink-2">{meta}</div>
     </div>
   )
